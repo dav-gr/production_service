@@ -1,0 +1,64 @@
+# CMake build directories
+/build/
+/out/
+/cmake_build/
+/x64/
+/x86/
+/Debug/
+/Release/
+/RelWithDebInfo/
+/MinSizeRel/
+
+# CMake cache and files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CMakeUserPresets.json
+CTestTestfile.cmake
+
+# Visual Studio 2022
+.vs/
+*.vcxproj.user
+*.vcxproj.filters
+*.sln
+*.vcxproj
+
+# Binaries and executables
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.dylib
+*.o
+*.obj
+
+# Compiler-specific
+*.pdb
+*.ilk
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*.log
+
+# Configuration files (keep examples)
+config.ini
+!config.ini.example
+
+# Dependencies (if installed locally)
+/vcpkg_installed/
+/conan/
+
+# Output directories
+/bin/
+/lib/

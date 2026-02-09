@@ -1,0 +1,13 @@
+[Server]
+Port=8080
+ReadTimeoutMsec=5000
+
+[Database]
+Host=localhost
+Port=5432
+Database=prod_auto_dev
+Username=prod_auto_dev
+Password=prod_auto_dev
+
+[Session]
+ExpirationMinutes=480
