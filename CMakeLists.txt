@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(PostProdMiddleware VERSION 1.0 LANGUAGES CXX)
+project(production_service VERSION 1.0 LANGUAGES CXX)
 
 # ============================================================================
 # Windows / Visual Studio Configuration
@@ -60,16 +60,16 @@ set(HEADERS
 # Create Executable
 # ============================================================================
 
-add_executable(PostProdMiddleware
+add_executable(production_service
     ${SOURCES}
     ${HEADERS}
 )
 
-target_include_directories(PostProdMiddleware PRIVATE
+target_include_directories(production_service PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(PostProdMiddleware PRIVATE
+target_link_libraries(production_service PRIVATE
     Qt6::Core
     Qt6::Network
     Qt6::Sql
@@ -83,12 +83,12 @@ target_link_libraries(PostProdMiddleware PRIVATE
 get_target_property(QT6_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
 get_filename_component(QT6_BIN_DIR "${QT6_QMAKE_EXECUTABLE}" DIRECTORY)
 
-add_custom_command(TARGET PostProdMiddleware POST_BUILD
+add_custom_command(TARGET production_service POST_BUILD
     COMMAND "${QT6_BIN_DIR}/windeployqt.exe"
         --no-translations
         --no-system-d3d-compiler
         --no-opengl-sw
-        "$<TARGET_FILE:PostProdMiddleware>"
+        "$<TARGET_FILE:production_service>"
     COMMENT "Running windeployqt..."
 )
 
@@ -107,7 +107,7 @@ configure_file(
 # ============================================================================
 
 message(STATUS "")
-message(STATUS "=== PostProdMiddleware Build Configuration ===")
+message(STATUS "=== production_service Build Configuration ===")
 message(STATUS "Platform: Windows (Visual Studio)")
 message(STATUS "Qt Version: ${Qt6_VERSION}")
 message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
