@@ -43,6 +43,10 @@ set(SOURCES
     # Server
     server/tcp_server.cpp
     server/request_handler.cpp
+    
+    # Pub/Sub
+    pubsub/event_publisher.cpp
+    pubsub/permanent_worker.cpp
 )
 
 set(HEADERS
@@ -54,6 +58,10 @@ set(HEADERS
     server/tcp_server.h
     server/request_handler.h
     server/protocol.h
+    
+    # Pub/Sub
+    pubsub/event_publisher.h
+    pubsub/permanent_worker.h
 )
 
 # ============================================================================
@@ -68,6 +76,55 @@ add_executable(production_service
 target_include_directories(production_service PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+# ============================================================================
+# PostgreSQL libpq (required for LISTEN/NOTIFY in pub/sub)
+# ============================================================================
+# Set PostgreSQL_ROOT via CMakeUserPresets.json or environment variable
+# Example: set(PostgreSQL_ROOT "C:/Program Files/PostgreSQL/16")
+
+find_package(PostgreSQL QUIET)
+
+if(PostgreSQL_FOUND)
+    message(STATUS "Found PostgreSQL: ${PostgreSQL_VERSION_STRING}")
+    message(STATUS "PostgreSQL include: ${PostgreSQL_INCLUDE_DIRS}")
+    message(STATUS "PostgreSQL libraries: ${PostgreSQL_LIBRARIES}")
+    
+    target_include_directories(production_service PRIVATE ${PostgreSQL_INCLUDE_DIRS})
+    target_link_libraries(production_service PRIVATE ${PostgreSQL_LIBRARIES})
+else()
+    # Fallback: Try to find libpq manually if FindPostgreSQL fails
+    # Common locations on Windows
+    set(LIBPQ_SEARCH_PATHS
+        "C:/Program Files/PostgreSQL/16"
+        "C:/Program Files/PostgreSQL/15"
+        "C:/Program Files/PostgreSQL/14"
+        "$ENV{PGROOT}"
+    )
+    
+    find_path(LIBPQ_INCLUDE_DIR libpq-fe.h
+        HINTS ${LIBPQ_SEARCH_PATHS}
+        PATH_SUFFIXES include
+    )
+    
+    find_library(LIBPQ_LIBRARY
+        NAMES libpq pq
+        HINTS ${LIBPQ_SEARCH_PATHS}
+        PATH_SUFFIXES lib
+    )
+    
+    if(LIBPQ_INCLUDE_DIR AND LIBPQ_LIBRARY)
+        message(STATUS "Found libpq manually:")
+        message(STATUS "  Include: ${LIBPQ_INCLUDE_DIR}")
+        message(STATUS "  Library: ${LIBPQ_LIBRARY}")
+        
+        target_include_directories(production_service PRIVATE ${LIBPQ_INCLUDE_DIR})
+        target_link_libraries(production_service PRIVATE ${LIBPQ_LIBRARY})
+    else()
+        message(WARNING "libpq not found! Pub/sub LISTEN/NOTIFY will not work.")
+        message(WARNING "Set PostgreSQL_ROOT or install PostgreSQL.")
+    endif()
+endif()
 
 target_link_libraries(production_service PRIVATE
     Qt6::Core
@@ -90,6 +147,35 @@ add_custom_command(TARGET production_service POST_BUILD
         --no-opengl-sw
         "$<TARGET_FILE:production_service>"
     COMMENT "Running windeployqt..."
+)
+
+# ============================================================================
+# Example Pub/Sub Client
+# ============================================================================
+
+add_executable(pubsub_example_client
+    examples/main.cpp
+    examples/client.cpp
+    examples/client.h
+)
+
+target_include_directories(pubsub_example_client PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/examples
+)
+
+target_link_libraries(pubsub_example_client PRIVATE
+    Qt6::Core
+    Qt6::Network
+)
+
+add_custom_command(TARGET pubsub_example_client POST_BUILD
+    COMMAND "${QT6_BIN_DIR}/windeployqt.exe"
+        --no-translations
+        --no-system-d3d-compiler
+        --no-opengl-sw
+        "$<TARGET_FILE:pubsub_example_client>"
+    COMMENT "Running windeployqt for example client..."
 )
 
 # ============================================================================

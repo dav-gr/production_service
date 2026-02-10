@@ -430,6 +430,10 @@ if (!db.isOpen()) {
     
     db.transaction();
     
+    // Enable bulk import mode to suppress per-row triggers
+    QSqlQuery bulkOn(db);
+    bulkOn.exec("SET app.bulk_import = 'on'");
+    
     for (int i = 0; i < barcodes.size(); i += batchSize) {
         QStringList batch = barcodes.mid(i, qMin(batchSize, barcodes.size() - i));
         
@@ -468,8 +472,20 @@ if (!db.isOpen()) {
     
 if (result.errorCount == 0) {
     db.commit();
+    
+    // Disable bulk import mode
+    QSqlQuery bulkOff(db);
+    bulkOff.exec("SET app.bulk_import = 'off'");
+    
+    // Emit bulk_import_finished event for pub/sub subscribers
+    // Note: EventPublisher::emitBulkImportFinished() should be called
+    // by the caller if pub/sub is enabled
 } else {
     db.rollback();
+    
+    // Disable bulk import mode even on rollback
+    QSqlQuery bulkOff(db);
+    bulkOff.exec("SET app.bulk_import = 'off'");
 }
     
 qDebug() << "DbService: Import complete -" << result.summary();

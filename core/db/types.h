@@ -4,6 +4,7 @@
 #include <QString>
 #include <QDateTime>
 #include <QVector>
+#include <QJsonObject>
 #include <optional>
 #include <cstdint>
 
@@ -160,6 +161,7 @@ struct Item {
     ProductionLineId productionLine = 0;
     QDateTime importedAt;
     std::optional<QDateTime> scannedAt;
+    bool isDeleted = false;
     
     QString statusString() const { return itemStatusToString(status); }
 };
@@ -171,6 +173,7 @@ struct Box {
     ProductionLineId productionLine = 0;
     QDateTime importedAt;
     std::optional<QDateTime> sealedAt;
+    bool isDeleted = false;
     
     QString statusString() const { return boxStatusToString(status); }
 };
@@ -287,6 +290,29 @@ struct AppConfig {
     }
 };
 
+// ============================================================================
+// Pub/Sub Event Types
+// ============================================================================
+
+struct Event {
+    qint64      id = 0;
+    QString     table;      // "items" | "boxes"
+    QString     type;       // "insert" | "delete" | "marked_as_deleted" | "status_to_0" | "bulk_import_finished"
+    qint64      rowId = 0;
+    QJsonObject payload;
+    QDateTime   createdAt;
+};
+
+struct SubscriberInfo {
+    QString  clientId;
+    QString  connectionMode;    // "permanent" | "one_shot"
+    QString  subscriptionMode;  // "full" | "notify_only"
+    QString  callbackHost;      // "ip:port" — used only for one_shot
+    qint64   lastEventId = 0;
+};
+
 } // namespace core
+
+Q_DECLARE_METATYPE(core::Event)
 
 #endif // CORE_TYPES_H
