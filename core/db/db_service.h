@@ -64,9 +64,12 @@ public:
     // =========================================================================
     // Production Lines (SYNC)
     // =========================================================================
-    
+
     QVector<ProductionLine> getProductionLines();
     std::optional<ProductionLine> getProductionLine(ProductionLineId id);
+    bool createProductionLine(const ProductionLine& line);
+    bool updateProductionLine(const ProductionLine& line);
+    bool deleteProductionLine(ProductionLineId id);
 
     // =========================================================================
     // Products (SYNC)
@@ -122,42 +125,50 @@ public:
     // =========================================================================
     // Import Operations (ASYNC)
     // =========================================================================
-    
+
     QFuture<ImportResult> importItemsAsync(const QString& filePath, 
-                                            ProductionLineId lineId);
+                                            ProductionLineId lineId,
+                                            ProductId productId);
     QFuture<ImportResult> importBoxesAsync(const QString& filePath,
-                                            ProductionLineId lineId);
+                                            ProductionLineId lineId,
+                                            ProductPackagingId packagingId);
     QFuture<ImportResult> importPalletsAsync(const QString& filePath,
                                               ProductionLineId lineId);
 
     // =========================================================================
     // Item Operations (SYNC)
     // =========================================================================
-    
-    std::optional<Item> getItem(ItemId id);
-    QVector<Item> getItemsByStatus(ItemStatus status, 
+
+    std::optional<Item> getItem(ProductId productId, ItemId id);
+    QVector<Item> getItemsByStatus(ProductId productId, ItemStatus status, 
                                     ProductionLineId lineId = 0, 
                                     int limit = 100);
-    QVector<Item> getItemsInBox(BoxId boxId);
-    QVector<Item> getScannedItemsNotInBox(ProductionLineId lineId = 0, int limit = 200);
-    int countScannedItemsNotInBox(ProductionLineId lineId = 0);
-    bool assignItemToBox(ItemId itemId, BoxId boxId);
-    int assignItemsToBox(const QVector<ItemId>& itemIds, BoxId boxId);
+    QVector<Item> getItemsInBox(ProductId productId, ProductPackagingId packagingId, BoxId boxId);
+    QVector<Item> getScannedItemsNotInBox(ProductId productId, ProductPackagingId packagingId,
+                                           ProductionLineId lineId = 0, int limit = 200);
+    int countScannedItemsNotInBox(ProductId productId, ProductPackagingId packagingId,
+                                   ProductionLineId lineId = 0);
+    bool assignItemToBox(ProductId productId, ProductPackagingId packagingId,
+                         ItemId itemId, BoxId boxId);
+    int assignItemsToBox(ProductId productId, ProductPackagingId packagingId,
+                         const QVector<ItemId>& itemIds, BoxId boxId);
 
     // =========================================================================
     // Box Operations (SYNC)
     // =========================================================================
-    
-    std::optional<Box> getBox(BoxId id);
-    QVector<Box> getBoxesByStatus(BoxStatus status, 
+
+    std::optional<Box> getBox(ProductPackagingId packagingId, BoxId id);
+    QVector<Box> getBoxesByStatus(ProductPackagingId packagingId, BoxStatus status, 
                                    ProductionLineId lineId = 0,
                                    int limit = 100);
-    QVector<Box> getSealedBoxesNotOnPallet(ProductionLineId lineId = 0, int limit = 200);
-    int countSealedBoxesNotOnPallet(ProductionLineId lineId = 0);
-    QVector<Box> getBoxesOnPallet(PalletId palletId);
-    bool sealBox(BoxId id);
-    bool assignBoxToPallet(BoxId boxId, PalletId palletId);
-    int getBoxItemCount(BoxId id);
+    QVector<Box> getSealedBoxesNotOnPallet(ProductPackagingId packagingId,
+                                            ProductionLineId lineId = 0, int limit = 200);
+    int countSealedBoxesNotOnPallet(ProductPackagingId packagingId,
+                                     ProductionLineId lineId = 0);
+    QVector<Box> getBoxesOnPallet(ProductPackagingId packagingId, PalletId palletId);
+    bool sealBox(ProductPackagingId packagingId, BoxId id);
+    bool assignBoxToPallet(ProductPackagingId packagingId, BoxId boxId, PalletId palletId);
+    int getBoxItemCount(ProductId productId, ProductPackagingId packagingId, BoxId id);
 
     // =========================================================================
     // Pallet Operations (SYNC)
@@ -173,14 +184,19 @@ public:
     // =========================================================================
     // Export Operations (ASYNC)
     // =========================================================================
-    
-    QFuture<ExportResult> exportItemsAsync(const QVector<ItemId>& itemIds,
+
+    QFuture<ExportResult> exportItemsAsync(ProductId productId,
+                                            const QVector<ItemId>& itemIds,
                                             const QString& lpTin);
-    QFuture<ExportResult> exportBoxesAsync(const QVector<BoxId>& boxIds, 
+    QFuture<ExportResult> exportBoxesAsync(ProductId productId,
+                                            ProductPackagingId packagingId,
+                                            const QVector<BoxId>& boxIds, 
                                             const QString& lpTin);
-    QFuture<ExportResult> exportPalletsAsync(const QVector<PalletId>& palletIds,
+    QFuture<ExportResult> exportPalletsAsync(ProductId productId,
+                                              ProductPackagingId packagingId,
+                                              const QVector<PalletId>& palletIds,
                                               const QString& lpTin);
-    
+
     std::optional<ExportDocument> getExportDocument(ExportDocumentId id);
     QVector<ExportDocument> getExportDocuments(int limit = 50, int offset = 0);
     int getExportDocumentItemCount(ExportDocumentId id);
@@ -190,8 +206,9 @@ public:
     // =========================================================================
     // Statistics (SYNC)
     // =========================================================================
-    
-    ProductionStats getStats(std::optional<ProductionLineId> lineId = std::nullopt);
+
+    ProductionStats getStats(ProductId productId, ProductPackagingId packagingId,
+                             std::optional<ProductionLineId> lineId = std::nullopt);
 
     // =========================================================================
     // Database Access
@@ -205,20 +222,36 @@ signals:
     void importProgress(int current, int total);
 
 private:
-bool ensureConnected();
-    
-// Import helpers
-ImportResult doImport(const QString& filePath, ProductionLineId lineId,
-                      const QString& tableName);
-    
-// Export helpers
-ExportResult doExportItems(const QVector<ItemId>& itemIds, const QString& lpTin);
-ExportResult doExportBoxes(const QVector<BoxId>& boxIds, const QString& lpTin);
-ExportResult doExportPallets(const QVector<PalletId>& palletIds, const QString& lpTin);
-QString generateItemExportXml(ExportDocumentId docId, const QString& lpTin, QSqlDatabase& db);
-QString generateBoxExportXml(ExportDocumentId docId, const QString& lpTin, QSqlDatabase& db);
-QString generatePalletExportXml(ExportDocumentId docId, const QString& lpTin, QSqlDatabase& db);
-QString cleanBarcodeForExport(const QString& barcode);
+    bool ensureConnected();
+
+    // Table name helpers
+    QString getItemsTableName(const QString& productGtin) const;
+    QString getBoxesTableName(const QString& packagingGtin) const;
+    QString getAssignmentsTableName(const QString& productGtin, const QString& packagingGtin) const;
+    QString getProductGtin(ProductId productId);
+    QString getPackagingGtin(ProductPackagingId packagingId);
+    std::optional<ProductId> getProductIdForPackaging(ProductPackagingId packagingId);
+
+    // Table creation helpers
+    bool createItemsTable(const QString& gtin, QSqlDatabase& db);
+    bool createBoxesTable(const QString& gtin, QSqlDatabase& db);
+    bool createAssignmentsTable(const QString& productGtin, const QString& packagingGtin, QSqlDatabase& db);
+
+    // Import helpers
+    ImportResult doImportItems(const QString& filePath, ProductionLineId lineId, ProductId productId);
+    ImportResult doImportBoxes(const QString& filePath, ProductionLineId lineId, ProductPackagingId packagingId);
+    ImportResult doImportPallets(const QString& filePath, ProductionLineId lineId);
+
+    // Export helpers
+    ExportResult doExportItems(ProductId productId, const QVector<ItemId>& itemIds, const QString& lpTin);
+    ExportResult doExportBoxes(ProductId productId, ProductPackagingId packagingId,
+                               const QVector<BoxId>& boxIds, const QString& lpTin);
+    ExportResult doExportPallets(ProductId productId, ProductPackagingId packagingId,
+                                 const QVector<PalletId>& palletIds, const QString& lpTin);
+    QString generateItemExportXml(ExportDocumentId docId, const QString& lpTin, QSqlDatabase& db);
+    QString generateBoxExportXml(ExportDocumentId docId, const QString& lpTin, QSqlDatabase& db);
+    QString generatePalletExportXml(ExportDocumentId docId, const QString& lpTin, QSqlDatabase& db);
+    QString cleanBarcodeForExport(const QString& barcode);
     
 // Parse helpers
     User parseUser(const QSqlQuery& query);

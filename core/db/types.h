@@ -159,10 +159,11 @@ struct Item {
     QString barcode;
     ItemStatus status = ItemStatus::Available;
     ProductionLineId productionLine = 0;
+    ProductId productId = 0;  // References the product (determines table)
     QDateTime importedAt;
     std::optional<QDateTime> scannedAt;
     bool isDeleted = false;
-    
+
     QString statusString() const { return itemStatusToString(status); }
 };
 
@@ -171,10 +172,11 @@ struct Box {
     QString barcode;
     BoxStatus status = BoxStatus::Empty;
     ProductionLineId productionLine = 0;
+    ProductPackagingId packagingId = 0;  // References the packaging (determines table)
     QDateTime importedAt;
     std::optional<QDateTime> sealedAt;
     bool isDeleted = false;
-    
+
     QString statusString() const { return boxStatusToString(status); }
 };
 
