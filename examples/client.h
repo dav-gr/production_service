@@ -71,9 +71,13 @@ private slots:
 private:
     void processMessage(const QJsonObject& msg);
     void sendAck(QTcpSocket* socket, qint64 eventId);
+    void sendBatchAck(QTcpSocket* socket, const QVector<qint64>& eventIds);
+    void flushPendingAcks();
     void logEvent(const QJsonObject& msg);
+    void saveResumeState();
+    static qint64 loadResumeState(const QString& clientId);
 
-    // Connection info (for reconnect)
+    // Connection info
     QString serverHost_;
     quint16 serverPort_ = 0;
     QString clientId_;
@@ -86,13 +90,19 @@ private:
     // Permanent mode
     QTcpSocket* socket_ = nullptr;
     QTimer*     reconnectTimer_ = nullptr;
+    QTimer*     ackFlushTimer_ = nullptr;
     QByteArray  buffer_;
+
+    // Batched ACK
+    QVector<qint64> pendingAcks_;
+    static constexpr int ACK_BATCH_SIZE = 100;
 
     // One-shot mode
     QTcpServer* callbackServer_ = nullptr;
 
     // Stats
     int eventsReceived_ = 0;
+    int lastLoggedCount_ = 0;
 };
 
 #endif // EXAMPLES_CLIENT_H

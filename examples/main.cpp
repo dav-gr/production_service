@@ -59,8 +59,8 @@ int main(int argc, char* argv[]) {
     );
     QCommandLineOption portOpt(
         QStringList() << "p" << "port",
-        "Publisher server port (default: 9100).",
-        "port", "9100"
+        "Publisher server port (default: 9000).",
+        "port", "9000"
     );
     QCommandLineOption modeOpt(
         QStringList() << "m" << "mode",
@@ -84,8 +84,8 @@ int main(int argc, char* argv[]) {
     );
     QCommandLineOption callbackPortOpt(
         QStringList() << "c" << "callback-port",
-        "Local callback port for one_shot mode (default: 9200).",
-        "port", "9200"
+        "Local callback port for one_shot mode (default: 9001).",
+        "port", "9001"
     );
 
     parser.addOption(hostOpt);

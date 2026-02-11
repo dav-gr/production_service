@@ -269,15 +269,15 @@ void EventPublisher::fetchAndDeliver() {
         return;
     }
 
-    QSqlQuery q(db);
-    q.prepare(
+    // Use direct SQL to avoid prepared statement issues
+    QString sql = QString(
         "SELECT id, table_name, event_type, row_id, payload, created_at "
-        "FROM event_log WHERE id > :min_id "
+        "FROM event_log WHERE id > %1 "
         "ORDER BY id LIMIT 1000"
-    );
-    q.bindValue(":min_id", minId);
+    ).arg(minId);
 
-    if (!q.exec()) {
+    QSqlQuery q(db);
+    if (!q.exec(sql)) {
         qWarning() << "EventPublisher: Failed to fetch events:" << q.lastError().text();
         return;
     }
@@ -316,6 +316,13 @@ void EventPublisher::fetchAndDeliver() {
                 deliverOneShot(sub, e);
             }
         }
+    }
+    lk.unlock();
+    
+    // If we fetched a full batch (1000 events), there might be more waiting
+    // Schedule another fetch to continue delivering pending events
+    if (events.size() == 1000) {
+        QMetaObject::invokeMethod(this, "fetchAndDeliver", Qt::QueuedConnection);
     }
 }
 
@@ -410,35 +417,56 @@ void EventPublisher::onNewSubscriberConnection() {
             handleSubscribeRequest(socket);
         });
 
-        // Timeout after 10 seconds
-        QTimer::singleShot(10000, socket, [socket]() {
+        // Timeout after 10 seconds - use a QTimer so we can cancel it later
+        QTimer* timeoutTimer = new QTimer(socket);
+        timeoutTimer->setSingleShot(true);
+        timeoutTimer->setInterval(10000);
+        connect(timeoutTimer, &QTimer::timeout, this, [socket, timeoutTimer]() {
             if (socket->state() == QAbstractSocket::ConnectedState) {
                 qWarning() << "EventPublisher: Subscribe timeout, closing socket";
                 socket->disconnectFromHost();
             }
+            timeoutTimer->deleteLater();
         });
+        timeoutTimer->start();
+        
+        // Store the timer as a property so we can cancel it in handleSubscribeRequest
+        socket->setProperty("subscribeTimeoutTimer", QVariant::fromValue(static_cast<QObject*>(timeoutTimer)));
     }
 }
 
 void EventPublisher::handleSubscribeRequest(QTcpSocket* socket) {
-    if (!socket->canReadLine()) return;
+if (!socket->canReadLine()) return;
 
-    // Disconnect readyRead to avoid re-entry
-    disconnect(socket, &QTcpSocket::readyRead, this, nullptr);
-
-    QByteArray line = socket->readLine().trimmed();
-    QJsonDocument doc = QJsonDocument::fromJson(line);
-    QJsonObject req = doc.object();
-
-    QString cmd = req["cmd"].toString();
-    if (cmd != "subscribe") {
-        QJsonObject resp;
-        resp["status"] = "error";
-        resp["message"] = "Expected subscribe command";
-        socket->write(QJsonDocument(resp).toJson(QJsonDocument::Compact) + "\n");
-        socket->disconnectFromHost();
-        return;
+// Disconnect readyRead to avoid re-entry
+disconnect(socket, &QTcpSocket::readyRead, this, nullptr);
+    
+// Helper lambda to cancel the subscription timeout timer
+auto cancelTimeoutTimer = [socket]() {
+    QObject* timerObj = socket->property("subscribeTimeoutTimer").value<QObject*>();
+    if (timerObj) {
+        QTimer* timer = qobject_cast<QTimer*>(timerObj);
+        if (timer) {
+            timer->stop();
+            timer->deleteLater();
+        }
     }
+};
+
+QByteArray line = socket->readLine().trimmed();
+QJsonDocument doc = QJsonDocument::fromJson(line);
+QJsonObject req = doc.object();
+
+QString cmd = req["cmd"].toString();
+if (cmd != "subscribe") {
+    cancelTimeoutTimer();
+    QJsonObject resp;
+    resp["status"] = "error";
+    resp["message"] = "Expected subscribe command";
+    socket->write(QJsonDocument(resp).toJson(QJsonDocument::Compact) + "\n");
+    socket->disconnectFromHost();
+    return;
+}
 
     QString clientId = req["client_id"].toString();
     QString connMode = req["connection_mode"].toString();
@@ -450,6 +478,7 @@ void EventPublisher::handleSubscribeRequest(QTcpSocket* socket) {
     if (clientId.isEmpty() || 
         (connMode != "permanent" && connMode != "one_shot") ||
         (subMode != "full" && subMode != "notify_only")) {
+        cancelTimeoutTimer();
         QJsonObject resp;
         resp["status"] = "error";
         resp["message"] = "Invalid subscribe parameters";
@@ -459,6 +488,7 @@ void EventPublisher::handleSubscribeRequest(QTcpSocket* socket) {
     }
 
     if (connMode == "one_shot" && callbackHost.isEmpty()) {
+        cancelTimeoutTimer();
         QJsonObject resp;
         resp["status"] = "error";
         resp["message"] = "callback_host required for one_shot mode";
@@ -497,19 +527,16 @@ void EventPublisher::handleSubscribeRequest(QTcpSocket* socket) {
     subscribers_.insert(clientId, sub);
 
     if (connMode == "permanent") {
-        // Send OK response first
-        QJsonObject resp;
-        resp["status"] = "ok";
-        resp["message"] = "Subscribed in permanent mode";
-        socket->write(QJsonDocument(resp).toJson(QJsonDocument::Compact) + "\n");
-        socket->flush();
-
-        // Setup permanent worker (transfers socket ownership)
-        setupPermanentSubscriber(sub, socket->socketDescriptor());
+        // Cancel the subscribe timeout timer since we have a valid permanent subscription
+        cancelTimeoutTimer();
         
-        // Detach socket from this thread (will be recreated in worker thread)
+        // DON'T send OK response here - worker will send it after initialization
+        
+        // IMPORTANT: Clear socket parent before moving to another thread
         socket->setParent(nullptr);
-        socket->deleteLater();
+        
+        // Transfer socket to worker thread (will send OK response from there)
+        setupPermanentSubscriber(sub, socket);
 
         // Replay events from resume_from
         lk.unlock();
@@ -517,6 +544,7 @@ void EventPublisher::handleSubscribeRequest(QTcpSocket* socket) {
 
     } else {
         // one_shot mode: just store and close
+        cancelTimeoutTimer();
         QJsonObject resp;
         resp["status"] = "ok";
         resp["message"] = "Subscribed in one_shot mode";
@@ -528,16 +556,18 @@ void EventPublisher::handleSubscribeRequest(QTcpSocket* socket) {
     emit subscriberConnected(clientId);
 }
 
-void EventPublisher::setupPermanentSubscriber(Subscriber* sub, qintptr socketDescriptor) {
+void EventPublisher::setupPermanentSubscriber(Subscriber* sub, QTcpSocket* socket) {
     QThread* thread = new QThread();
     PermanentWorker* worker = new PermanentWorker(
-        socketDescriptor,
+        socket,
         sub->clientId,
         sub->subscriptionMode,
         sub->lastEventId
     );
 
+    // Move both worker AND socket to the new thread
     worker->moveToThread(thread);
+    socket->moveToThread(thread);
 
     connect(thread, &QThread::started, worker, &PermanentWorker::initialize);
     connect(thread, &QThread::finished, worker, &QObject::deleteLater);
@@ -554,36 +584,102 @@ void EventPublisher::replayEvents(Subscriber* sub, qint64 fromEventId) {
     QSqlDatabase db = getWorkerDatabase();
     if (!db.isOpen()) return;
 
-    QSqlQuery q(db);
-    q.prepare(
-        "SELECT id, table_name, event_type, row_id, payload, created_at "
-        "FROM event_log WHERE id > :from_id "
-        "ORDER BY id LIMIT 1000"
-    );
-    q.bindValue(":from_id", fromEventId);
+    // Get total pending events count
+    QString countSql = QString(
+        "SELECT COUNT(*) FROM event_log WHERE id > %1"
+    ).arg(fromEventId);
 
-    if (!q.exec()) {
-        qWarning() << "EventPublisher: Failed to replay events:" << q.lastError().text();
+    QSqlQuery countQuery(db);
+    if (!countQuery.exec(countSql) || !countQuery.next()) return;
+
+    qint64 total = countQuery.value(0).toLongLong();
+    if (total == 0) {
+        qDebug() << "EventPublisher: No pending events for" << sub->clientId;
         return;
     }
 
-    QMutexLocker lk(&mutex_);
-    while (q.next()) {
-        core::Event e;
-        e.id        = q.value(0).toLongLong();
-        e.table     = q.value(1).toString();
-        e.type      = q.value(2).toString();
-        e.rowId     = q.value(3).toLongLong();
-        e.payload   = QJsonDocument::fromJson(q.value(4).toByteArray()).object();
-        e.createdAt = q.value(5).toDateTime();
+    // Calculate batch plan
+    constexpr int BATCH_SIZE = 1000;
+    int tail = static_cast<int>(total % BATCH_SIZE);
+    int batchCount = static_cast<int>(total / BATCH_SIZE) + (tail != 0 ? 1 : 0);
 
-        if (sub->worker) {
+    qInfo() << "EventPublisher: Replay plan for" << sub->clientId
+            << "- total:" << total
+            << "batches:" << batchCount
+            << "tail:" << tail
+            << "(from event_id:" << fromEventId << ")";
+
+    // Schedule first batch asynchronously (worker thread needs to be ready)
+    QMetaObject::invokeMethod(this, [this, sub, fromEventId, batchCount]() {
+        replayEventsBatch(sub, fromEventId, 1, batchCount);
+    }, Qt::QueuedConnection);
+}
+
+void EventPublisher::replayEventsBatch(Subscriber* sub, qint64 fromEventId,
+                                        int batchNum, int batchCount) {
+    QSqlDatabase db = getWorkerDatabase();
+    if (!db.isOpen()) {
+        qWarning() << "EventPublisher: Database not available for replay";
+        return;
+    }
+
+    QString sql = QString(
+        "SELECT id, table_name, event_type, row_id, payload, created_at "
+        "FROM event_log WHERE id > %1 "
+        "ORDER BY id LIMIT 1000"
+    ).arg(fromEventId);
+
+    QSqlQuery q(db);
+    if (!q.exec(sql)) {
+        qWarning() << "EventPublisher: Replay batch" << batchNum << "failed:"
+                   << q.lastError().text();
+        return;
+    }
+
+    int count = 0;
+    qint64 lastId = fromEventId;
+
+    {
+        QMutexLocker lk(&mutex_);
+        if (!subscribers_.contains(sub->clientId) || !sub->worker) {
+            qWarning() << "EventPublisher: Client" << sub->clientId
+                       << "disconnected during replay";
+            return;
+        }
+
+        while (q.next()) {
+            core::Event e;
+            e.id        = q.value(0).toLongLong();
+            e.table     = q.value(1).toString();
+            e.type      = q.value(2).toString();
+            e.rowId     = q.value(3).toLongLong();
+            e.payload   = QJsonDocument::fromJson(q.value(4).toByteArray()).object();
+            e.createdAt = q.value(5).toDateTime();
+
             QMetaObject::invokeMethod(
                 sub->worker, "deliverEvent",
                 Qt::QueuedConnection,
                 Q_ARG(core::Event, e)
             );
+
+            lastId = e.id;
+            count++;
         }
+    }
+
+    if (count == 0) return;
+
+    qDebug() << "EventPublisher: Batch" << batchNum << "/" << batchCount
+             << "(" << count << "events, last_id:" << lastId << ")";
+
+    // Schedule next batch if not the last one
+    if (batchNum < batchCount) {
+        QMetaObject::invokeMethod(this, [this, sub, lastId, batchNum, batchCount]() {
+            replayEventsBatch(sub, lastId, batchNum + 1, batchCount);
+        }, Qt::QueuedConnection);
+    } else {
+        qInfo() << "EventPublisher: Replay complete for" << sub->clientId
+                << "- delivered" << batchCount << "batches";
     }
 }
 
@@ -667,25 +763,25 @@ void EventPublisher::upsertSubscriber(const QString& clientId, const QString& co
     QSqlDatabase db = getWorkerDatabase();
     if (!db.isOpen()) return;
 
-    QSqlQuery q(db);
-    q.prepare(
+    // Use direct SQL instead of prepare() to avoid prepared statement issues
+    QString escapedClientId = QString(clientId).replace("'", "''");
+    QString escapedCallback = callbackHost.isEmpty() ? "NULL" 
+                             : "'" + QString(callbackHost).replace("'", "''") + "'";
+    
+    QString sql = QString(
         "INSERT INTO subscribers (client_id, connection_mode, subscription_mode, "
         "callback_host, last_event_id, updated_at) "
-        "VALUES (:cid, :conn, :sub, :cb, :last, now()) "
+        "VALUES ('%1', '%2', '%3', %4, %5, now()) "
         "ON CONFLICT (client_id) DO UPDATE SET "
         "connection_mode = EXCLUDED.connection_mode, "
         "subscription_mode = EXCLUDED.subscription_mode, "
         "callback_host = EXCLUDED.callback_host, "
         "last_event_id = GREATEST(subscribers.last_event_id, EXCLUDED.last_event_id), "
         "updated_at = now()"
-    );
-    q.bindValue(":cid", clientId);
-    q.bindValue(":conn", connMode);
-    q.bindValue(":sub", subMode);
-    q.bindValue(":cb", callbackHost.isEmpty() ? QVariant() : callbackHost);
-    q.bindValue(":last", resumeFrom);
+    ).arg(escapedClientId, connMode, subMode, escapedCallback).arg(resumeFrom);
 
-    if (!q.exec()) {
+    QSqlQuery q(db);
+    if (!q.exec(sql)) {
         qWarning() << "EventPublisher: Failed to upsert subscriber:" << q.lastError().text();
     }
 }
@@ -694,15 +790,14 @@ void EventPublisher::updateLastEventId(const QString& clientId, qint64 eventId) 
     QSqlDatabase db = getWorkerDatabase();
     if (!db.isOpen()) return;
 
-    QSqlQuery q(db);
-    q.prepare(
-        "UPDATE subscribers SET last_event_id = GREATEST(last_event_id, :eid), "
-        "updated_at = now() WHERE client_id = :cid"
-    );
-    q.bindValue(":eid", eventId);
-    q.bindValue(":cid", clientId);
+    QString escapedClientId = QString(clientId).replace("'", "''");
+    QString sql = QString(
+        "UPDATE subscribers SET last_event_id = GREATEST(last_event_id, %1), "
+        "updated_at = now() WHERE client_id = '%2'"
+    ).arg(eventId).arg(escapedClientId);
 
-    if (!q.exec()) {
+    QSqlQuery q(db);
+    if (!q.exec(sql)) {
         qWarning() << "EventPublisher: Failed to update last_event_id:" << q.lastError().text();
     }
 }
@@ -743,15 +838,18 @@ void EventPublisher::emitBulkImportFinished(const QString& tableName,
     payload["rows_affected"] = rowsAffected;
     payload["production_line"] = lineId;
 
-    QSqlQuery q(db);
-    q.prepare(
+    // Use direct SQL to avoid prepared statement issues
+    QString escapedTable = QString(tableName).replace("'", "''");
+    QString payloadJson = QString(QJsonDocument(payload).toJson(QJsonDocument::Compact))
+        .replace("'", "''");
+    
+    QString sql = QString(
         "INSERT INTO event_log (table_name, event_type, payload) "
-        "VALUES (:table, 'bulk_import_finished', :payload)"
-    );
-    q.bindValue(":table", tableName);
-    q.bindValue(":payload", QJsonDocument(payload).toJson(QJsonDocument::Compact));
+        "VALUES ('%1', 'bulk_import_finished', '%2')"
+    ).arg(escapedTable, payloadJson);
 
-    if (!q.exec()) {
+    QSqlQuery q(db);
+    if (!q.exec(sql)) {
         qWarning() << "EventPublisher: Failed to emit bulk_import_finished:" << q.lastError().text();
         return;
     }

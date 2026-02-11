@@ -116,8 +116,9 @@ private:
     void updateLastEventId(const QString& clientId, qint64 eventId);
 
     void handleSubscribeRequest(QTcpSocket* socket);
-    void setupPermanentSubscriber(Subscriber* sub, qintptr socketDescriptor);
+    void setupPermanentSubscriber(Subscriber* sub, QTcpSocket* socket);
     void replayEvents(Subscriber* sub, qint64 fromEventId);
+    void replayEventsBatch(Subscriber* sub, qint64 fromEventId, int batchNum, int batchCount);
 
     void fetchAndDeliver();
     void deliverOneShot(Subscriber* sub, const core::Event& event);

@@ -19,7 +19,7 @@ class PermanentWorker : public QObject {
     Q_OBJECT
 
 public:
-    PermanentWorker(qintptr socketDescriptor, 
+    PermanentWorker(QTcpSocket* socket,
                     const QString& clientId,
                     const QString& subscriptionMode, 
                     qint64 lastEventId);
@@ -27,7 +27,8 @@ public:
 
 public slots:
     /**
-     * @brief Initialize the socket (must be called from worker thread)
+     * @brief Initialize the worker (called after moveToThread)
+     * Sends the OK response to the client.
      */
     void initialize();
 
@@ -78,7 +79,6 @@ private slots:
 private:
     void processMessage(const QByteArray& line);
 
-    qintptr         socketDescriptor_;
     QTcpSocket*     socket_ = nullptr;
     QString         clientId_;
     QString         subscriptionMode_;

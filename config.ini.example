@@ -1,5 +1,6 @@
 [Server]
 Port=8080
+PubSubPort=9000
 ReadTimeoutMsec=5000
 
 [Database]

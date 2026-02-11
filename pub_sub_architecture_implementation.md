@@ -10,6 +10,10 @@ Extend the existing `production_service` TCP server with a pub/sub capability so
 **production_line** desktop app receives real-time notifications when `items` or `boxes`
 change (insert, delete, mark as deleted, status 1?0, status 2?0, bulk import finished).
 
+**Default ports:**
+- Request/Response server: **8080**
+- Pub/Sub event publisher: **9000**
+
 **Design pillars:**
 - Durable `event_log` table — source of truth, survives crashes
 - PostgreSQL `LISTEN/NOTIFY` — lightweight wake-up only (no payload)

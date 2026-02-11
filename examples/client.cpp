@@ -5,6 +5,8 @@
 #include <QHostAddress>
 #include <QNetworkInterface>
 #include <QDebug>
+#include <QFile>
+#include <QCoreApplication>
 
 // ============================================================================
 // Construction / Destruction
@@ -16,6 +18,9 @@ ExampleClient::ExampleClient(QObject* parent)
 }
 
 ExampleClient::~ExampleClient() {
+    if (ackFlushTimer_) {
+        ackFlushTimer_->stop();
+    }
     if (reconnectTimer_) {
         reconnectTimer_->stop();
     }
@@ -39,6 +44,13 @@ void ExampleClient::connectPermanent(const QString& serverHost, quint16 serverPo
     clientId_ = clientId;
     connectionMode_ = "permanent";
     subscriptionMode_ = subscriptionMode;
+
+    // Load resume state from file (overrides parameter if file exists)
+    qint64 savedId = loadResumeState(clientId);
+    if (savedId > resumeFrom) {
+        qInfo() << "Resuming from saved state: event_id" << savedId;
+        resumeFrom = savedId;
+    }
     resumeFrom_ = resumeFrom;
     lastEventId_ = resumeFrom;
 
@@ -59,11 +71,24 @@ void ExampleClient::connectPermanent(const QString& serverHost, quint16 serverPo
     connect(socket_, &QTcpSocket::errorOccurred,
             this, &ExampleClient::onPermanentError);
 
-    // Reconnect timer
     reconnectTimer_ = new QTimer(this);
     reconnectTimer_->setInterval(5000);
     connect(reconnectTimer_, &QTimer::timeout,
             this, &ExampleClient::onReconnectTimer);
+
+    // Periodic flush to catch partial final batches (500ms)
+    ackFlushTimer_ = new QTimer(this);
+    ackFlushTimer_->setInterval(500);
+    connect(ackFlushTimer_, &QTimer::timeout, this, [this]() {
+        flushPendingAcks();
+        // Log final progress when events stopped arriving
+        if (eventsReceived_ > 0 && eventsReceived_ != lastLoggedCount_) {
+            qInfo() << "Progress:" << eventsReceived_
+                    << "events received (last_id:" << lastEventId_ << ")";
+            lastLoggedCount_ = eventsReceived_;
+        }
+    });
+    ackFlushTimer_->start();
 
     qInfo() << "Connecting to server...";
     socket_->connectToHost(serverHost, serverPort);
@@ -72,7 +97,8 @@ void ExampleClient::connectPermanent(const QString& serverHost, quint16 serverPo
 void ExampleClient::onPermanentConnected() {
     qInfo() << "Connected to server, sending subscribe request...";
 
-    // Send subscribe message
+    pendingAcks_.clear();
+
     QJsonObject sub;
     sub["cmd"] = QStringLiteral("subscribe");
     sub["client_id"] = clientId_;
@@ -84,8 +110,6 @@ void ExampleClient::onPermanentConnected() {
     QByteArray data = QJsonDocument(sub).toJson(QJsonDocument::Compact) + "\n";
     socket_->write(data);
     socket_->flush();
-
-    qInfo() << "Subscribe request sent:" << data.trimmed();
 }
 
 void ExampleClient::onPermanentReadyRead() {
@@ -109,35 +133,43 @@ void ExampleClient::onPermanentReadyRead() {
         QString cmd = msg["cmd"].toString();
 
         if (cmd == "event") {
-            logEvent(msg);
             processMessage(msg);
 
-            qint64 eventId = msg["event_id"].toInteger();
-            sendAck(socket_, eventId);
+            pendingAcks_.append(msg["event_id"].toInteger());
+
+            if (pendingAcks_.size() >= ACK_BATCH_SIZE) {
+                sendBatchAck(socket_, pendingAcks_);
+                pendingAcks_.clear();
+            }
 
         } else if (cmd == "ping") {
-            qDebug() << "<< PING";
-            QByteArray pong = QByteArrayLiteral("{\"cmd\":\"pong\"}\n");
-            socket_->write(pong);
+            socket_->write(QByteArrayLiteral("{\"cmd\":\"pong\"}\n"));
             socket_->flush();
-            qDebug() << ">> PONG";
 
         } else if (cmd == "ok" || msg.contains("status")) {
-            // Subscribe response
             QString status = msg["status"].toString();
-            QString message = msg["message"].toString();
-            qInfo() << "Server response:" << status << "-" << message;
             if (status == "ok") {
+                qInfo() << "Subscribed successfully";
                 emit connected();
+            } else {
+                qWarning() << "Subscription failed:" << msg["message"].toString();
             }
-        } else {
-            qDebug() << "<< Unknown command:" << cmd << line;
         }
+    }
+
+    // Flush remaining ACKs after processing all available data
+    if (!pendingAcks_.isEmpty()) {
+        sendBatchAck(socket_, pendingAcks_);
+        pendingAcks_.clear();
     }
 }
 
 void ExampleClient::onPermanentDisconnected() {
-    qWarning() << "Disconnected from server. Reconnecting in 5 seconds...";
+    // Flush any pending ACKs before disconnect
+    flushPendingAcks();
+    
+    qInfo() << "Disconnected. Total received:" << eventsReceived_ 
+            << "last_event_id:" << lastEventId_;
     reconnectTimer_->start();
     emit disconnected();
 }
@@ -306,49 +338,9 @@ void ExampleClient::onCallbackConnection() {
 // ============================================================================
 
 void ExampleClient::processMessage(const QJsonObject& msg) {
-    QString type = msg["type"].toString();
-    QString table = msg["table"].toString();
     qint64 eventId = msg["event_id"].toInteger();
-    qint64 rowId = msg["row_id"].toInteger();
-    QJsonObject payload = msg["payload"].toObject();
-
     eventsReceived_++;
 
-    if (type == "insert") {
-        QString barcode = payload["bar_code"].toString();
-        qInfo().noquote() << QString("  -> [%1] INSERT %2 row_id=%3 bar_code=%4")
-            .arg(table).arg(type).arg(rowId).arg(barcode);
-
-    } else if (type == "delete") {
-        QString barcode = payload["bar_code"].toString();
-        qInfo().noquote() << QString("  -> [%1] DELETE row_id=%2 bar_code=%3")
-            .arg(table).arg(rowId).arg(barcode);
-
-    } else if (type == "marked_as_deleted") {
-        QString barcode = payload["bar_code"].toString();
-        int status = payload["status"].toInt();
-        qInfo().noquote() << QString("  -> [%1] MARKED_AS_DELETED row_id=%2 bar_code=%3 status=%4")
-            .arg(table).arg(rowId).arg(barcode).arg(status);
-
-    } else if (type == "status_to_0") {
-        int oldStatus = payload["old_status"].toInt();
-        int newStatus = payload["new_status"].toInt();
-        QString barcode = payload["bar_code"].toString();
-        qInfo().noquote() << QString("  -> [%1] STATUS_TO_0 row_id=%2 bar_code=%3 %4->%5")
-            .arg(table).arg(rowId).arg(barcode).arg(oldStatus).arg(newStatus);
-
-    } else if (type == "bulk_import_finished") {
-        int rows = payload["rows_affected"].toInt();
-        qint64 line = payload["production_line"].toInteger();
-        qInfo().noquote() << QString("  -> [%1] BULK_IMPORT_FINISHED production_line=%2 rows=%3")
-            .arg(table).arg(line).arg(rows);
-
-    } else {
-        qInfo().noquote() << QString("  -> [%1] UNKNOWN TYPE '%2' row_id=%3")
-            .arg(table).arg(type).arg(rowId);
-    }
-
-    // Track last processed event
     if (eventId > lastEventId_) {
         lastEventId_ = eventId;
     }
@@ -367,6 +359,63 @@ void ExampleClient::sendAck(QTcpSocket* socket, qint64 eventId) {
     socket->flush();
 
     qDebug() << ">> ACK event_id:" << eventId;
+}
+
+void ExampleClient::sendBatchAck(QTcpSocket* socket, const QVector<qint64>& eventIds) {
+    if (eventIds.isEmpty()) return;
+
+    qint64 maxEventId = eventIds.last();
+    for (qint64 id : eventIds) {
+        if (id > maxEventId) maxEventId = id;
+    }
+
+    QJsonObject ack;
+    ack["cmd"] = QStringLiteral("ack");
+    ack["client_id"] = clientId_;
+    ack["ack"] = maxEventId;
+
+    socket->write(QJsonDocument(ack).toJson(QJsonDocument::Compact) + "\n");
+    socket->flush();
+
+    // Log every 1000 events
+    int prevThousand = (eventsReceived_ - eventIds.size()) / 1000;
+    int currThousand = eventsReceived_ / 1000;
+    if (currThousand > prevThousand || eventsReceived_ == eventIds.size()) {
+        qInfo() << "Progress:" << eventsReceived_
+                << "events received (last_id:" << maxEventId << ")";
+        lastLoggedCount_ = eventsReceived_;
+    }
+
+    // Persist resume state
+    saveResumeState();
+}
+
+void ExampleClient::flushPendingAcks() {
+    if (!pendingAcks_.isEmpty() && socket_ && socket_->isOpen()) {
+        sendBatchAck(socket_, pendingAcks_);
+        pendingAcks_.clear();
+    }
+}
+
+void ExampleClient::saveResumeState() {
+    QString path = QCoreApplication::applicationDirPath()
+                   + "/" + clientId_ + ".resume";
+    QFile file(path);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        file.write(QByteArray::number(lastEventId_));
+    }
+}
+
+qint64 ExampleClient::loadResumeState(const QString& clientId) {
+    QString path = QCoreApplication::applicationDirPath()
+                   + "/" + clientId + ".resume";
+    QFile file(path);
+    if (file.open(QIODevice::ReadOnly)) {
+        bool ok = false;
+        qint64 id = file.readAll().trimmed().toLongLong(&ok);
+        if (ok) return id;
+    }
+    return 0;
 }
 
 void ExampleClient::logEvent(const QJsonObject& msg) {

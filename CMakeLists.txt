@@ -82,16 +82,17 @@ target_include_directories(production_service PRIVATE
 # ============================================================================
 # Set PostgreSQL_ROOT via CMakeUserPresets.json or environment variable
 # Example: set(PostgreSQL_ROOT "C:/Program Files/PostgreSQL/16")
-
+set(PostgreSQL_ROOT "C:/local/PostgreSQL/18")
 find_package(PostgreSQL QUIET)
 
 if(PostgreSQL_FOUND)
-    message(STATUS "Found PostgreSQL: ${PostgreSQL_VERSION_STRING}")
-    message(STATUS "PostgreSQL include: ${PostgreSQL_INCLUDE_DIRS}")
-    message(STATUS "PostgreSQL libraries: ${PostgreSQL_LIBRARIES}")
+message(STATUS "Found PostgreSQL: ${PostgreSQL_VERSION_STRING}")
+message(STATUS "PostgreSQL include: ${PostgreSQL_INCLUDE_DIRS}")
+message(STATUS "PostgreSQL libraries: ${PostgreSQL_LIBRARIES}")
     
-    target_include_directories(production_service PRIVATE ${PostgreSQL_INCLUDE_DIRS})
-    target_link_libraries(production_service PRIVATE ${PostgreSQL_LIBRARIES})
+target_include_directories(production_service PRIVATE ${PostgreSQL_INCLUDE_DIRS})
+target_link_libraries(production_service PRIVATE ${PostgreSQL_LIBRARIES})
+target_compile_definitions(production_service PRIVATE PUBSUB_USE_LIBPQ=1)
 else()
     # Fallback: Try to find libpq manually if FindPostgreSQL fails
     # Common locations on Windows
@@ -120,6 +121,7 @@ else()
         
         target_include_directories(production_service PRIVATE ${LIBPQ_INCLUDE_DIR})
         target_link_libraries(production_service PRIVATE ${LIBPQ_LIBRARY})
+        target_compile_definitions(production_service PRIVATE PUBSUB_USE_LIBPQ=1)
     else()
         message(WARNING "libpq not found! Pub/sub LISTEN/NOTIFY will not work.")
         message(WARNING "Set PostgreSQL_ROOT or install PostgreSQL.")

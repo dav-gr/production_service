@@ -4,13 +4,15 @@
 #include <QDir>
 #include <QDebug>
 #include "server/tcp_server.h"
+#include "pubsub/event_publisher.h"
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
 struct Config {
-    quint16 port = 8080;
+quint16 port = 8080;
+quint16 pubsubPort = 9000;
     QString dbHost = "localhost";
     int dbPort = 5432;
     QString dbName = "prod_auto_dev";
@@ -30,6 +32,7 @@ struct Config {
         
         s.beginGroup("Server");
         cfg.port = static_cast<quint16>(s.value("Port", 8080).toUInt());
+        cfg.pubsubPort = static_cast<quint16>(s.value("PubSubPort", 9000).toUInt());
         cfg.readTimeoutMsec = s.value("ReadTimeoutMsec", 5000).toInt();
         s.endGroup();
         
@@ -88,10 +91,19 @@ int main(int argc, char* argv[]) {
     
     Config cfg = Config::load(cfgPath);
     
-    qInfo() << "Port:" << cfg.port;
+    qInfo() << "Request/Response Port:" << cfg.port;
+    qInfo() << "Pub/Sub Port:" << cfg.pubsubPort;
     qInfo() << "Database:" << cfg.dbHost << cfg.dbPort << cfg.dbName;
     
-    // Create and start server
+    // Create database config
+    core::AppConfig dbConfig;
+    dbConfig.host = cfg.dbHost;
+    dbConfig.port = cfg.dbPort;
+    dbConfig.database = cfg.dbName;
+    dbConfig.user = cfg.dbUser;
+    dbConfig.password = cfg.dbPassword;
+    
+    // Create and start request/response server
     server::TcpServer server;
     server.setReadTimeout(cfg.readTimeoutMsec);
     
@@ -106,6 +118,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    qInfo() << "=== Server ready ===";
+    qInfo() << "=== Request/Response Server ready on port" << cfg.port << "===";
+    
+    // Create and start pub/sub event publisher
+    pubsub::EventPublisher publisher(dbConfig);
+    
+    if (!publisher.start(cfg.pubsubPort)) {
+        qCritical() << "Failed to start pub/sub publisher";
+        return 1;
+    }
+    
+    qInfo() << "=== Pub/Sub Publisher ready on port" << cfg.pubsubPort << "===";
+    qInfo() << "=== All services ready ===";
+    
     return app.exec();
 }

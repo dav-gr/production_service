@@ -5,15 +5,16 @@
 
 namespace pubsub {
 
-PermanentWorker::PermanentWorker(qintptr socketDescriptor,
+PermanentWorker::PermanentWorker(QTcpSocket* socket,
                                  const QString& clientId,
                                  const QString& subscriptionMode,
                                  qint64 lastEventId)
-    : socketDescriptor_(socketDescriptor)
+    : socket_(socket)
     , clientId_(clientId)
     , subscriptionMode_(subscriptionMode)
     , lastEventId_(lastEventId)
 {
+    // Socket will be moved to this worker's thread
 }
 
 PermanentWorker::~PermanentWorker() {
@@ -25,13 +26,14 @@ PermanentWorker::~PermanentWorker() {
 }
 
 void PermanentWorker::initialize() {
-    socket_ = new QTcpSocket(this);
-    
-    if (!socket_->setSocketDescriptor(socketDescriptor_)) {
-        qWarning() << "PermanentWorker: Failed to set socket descriptor for" << clientId_;
-        emit socketError(clientId_, socket_->errorString());
+    if (!socket_) {
+        qWarning() << "PermanentWorker: Socket is null for" << clientId_;
+        emit socketError(clientId_, "Socket is null");
         return;
     }
+
+    // Socket has been moved to this thread via moveToThread
+    socket_->setParent(this);
 
     connect(socket_, &QTcpSocket::readyRead, this, &PermanentWorker::onReadyRead);
     connect(socket_, &QTcpSocket::disconnected, this, &PermanentWorker::onDisconnected);
@@ -40,6 +42,13 @@ void PermanentWorker::initialize() {
     qDebug() << "PermanentWorker: Initialized for client" << clientId_ 
              << "mode:" << subscriptionMode_ 
              << "resumeFrom:" << lastEventId_;
+
+    // Send OK response now that we're in the worker thread
+    QJsonObject resp;
+    resp["status"] = "ok";
+    resp["message"] = "Subscribed in permanent mode";
+    socket_->write(QJsonDocument(resp).toJson(QJsonDocument::Compact) + "\n");
+    socket_->flush();
 
     emit initialized();
 }
@@ -76,7 +85,7 @@ void PermanentWorker::deliverEvent(const core::Event& event) {
     socket_->write(data);
     socket_->flush();
 
-    qDebug() << "PermanentWorker: Delivered event" << event.id << "to" << clientId_;
+    // Event delivered - no per-event logging (use batch logs instead)
 }
 
 void PermanentWorker::sendPing() {
@@ -122,10 +131,10 @@ void PermanentWorker::processMessage(const QByteArray& line) {
         if (ackId > lastEventId_) {
             lastEventId_ = ackId;
             emit ackReceived(clientId_, ackId);
-            qDebug() << "PermanentWorker: ACK received from" << clientId_ << "eventId:" << ackId;
+            // ACK processed - no per-ACK logging (client uses batched ACKs)
         }
     } else if (cmd == "pong") {
-        qDebug() << "PermanentWorker: Pong received from" << clientId_;
+        // Pong received - heartbeat OK, no logging needed
     } else {
         qWarning() << "PermanentWorker: Unknown command:" << cmd;
     }
