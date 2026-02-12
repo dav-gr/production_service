@@ -11,6 +11,16 @@ Instead of single `items` and `boxes` tables, the system now uses:
 - `boxes_{packaging_gtin}` - Separate boxes table per packaging  
 - `{product_gtin}_{packaging_gtin}_assignments` - Item-box assignments per product/packaging combination
 
+### Migration Strategy: Dual API Support
+
+**The old API is preserved and marked as `[[deprecated]]`**, allowing gradual migration:
+
+1. **Immediate**: Existing code continues to work using the deprecated API (uses legacy `items`/`boxes`/`item_box_assignments` tables)
+2. **Gradual Migration**: Update code to use the new API with `ProductId`/`ProductPackagingId` parameters
+3. **Completion**: Once all code is migrated, the deprecated API can be removed in a future version
+
+**Compiler warnings will indicate which methods need migration.**
+
 ---
 
 ## Table of Contents
@@ -24,6 +34,7 @@ Instead of single `items` and `boxes` tables, the system now uses:
 7. [Statistics](#7-statistics)
 8. [Migration Checklist](#8-migration-checklist)
 9. [Code Examples](#9-code-examples)
+10. [Deprecated API Reference](#10-deprecated-api-reference)
 
 ---
 
@@ -740,5 +751,131 @@ db->createPackaging(packaging);
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.1 | 2026-01-18 | Added deprecated API for backward compatibility |
 | 2.0 | 2026-01-18 | Dynamic tables per product/packaging GTIN |
 | 1.0 | - | Original single-table architecture |
+
+---
+
+## 10. Deprecated API Reference
+
+The following methods are marked as `[[deprecated]]` and continue to work with the legacy `items`, `boxes`, and `item_box_assignments` tables. They will generate compiler warnings to help identify code that needs migration.
+
+### 10.1 Why Deprecated API is Preserved
+
+1. **Backward Compatibility**: Existing code continues to work without immediate changes
+2. **Gradual Migration**: Teams can migrate incrementally
+3. **Legacy Data**: Access to existing data in legacy tables during transition
+4. **Compiler Warnings**: Help identify all call sites that need updates
+
+### 10.2 Deprecated Import Methods
+
+```cpp
+// Uses legacy 'items' table
+[[deprecated("Use importItemsAsync(filePath, lineId, productId) instead")]]
+QFuture<ImportResult> importItemsAsync(const QString& filePath, ProductionLineId lineId);
+
+// Uses legacy 'boxes' table
+[[deprecated("Use importBoxesAsync(filePath, lineId, packagingId) instead")]]
+QFuture<ImportResult> importBoxesAsync(const QString& filePath, ProductionLineId lineId);
+```
+
+### 10.3 Deprecated Item Methods
+
+```cpp
+[[deprecated("Use getItem(productId, id) instead")]]
+std::optional<Item> getItem(ItemId id);
+
+[[deprecated("Use getItemsByStatus(productId, status, lineId, limit) instead")]]
+QVector<Item> getItemsByStatus(ItemStatus status, ProductionLineId lineId = 0, int limit = 100);
+
+[[deprecated("Use getItemsInBox(productId, packagingId, boxId) instead")]]
+QVector<Item> getItemsInBox(BoxId boxId);
+
+[[deprecated("Use getScannedItemsNotInBox(productId, packagingId, lineId, limit) instead")]]
+QVector<Item> getScannedItemsNotInBox(ProductionLineId lineId = 0, int limit = 200);
+
+[[deprecated("Use countScannedItemsNotInBox(productId, packagingId, lineId) instead")]]
+int countScannedItemsNotInBox(ProductionLineId lineId = 0);
+
+[[deprecated("Use assignItemToBox(productId, packagingId, itemId, boxId) instead")]]
+bool assignItemToBox(ItemId itemId, BoxId boxId);
+
+[[deprecated("Use assignItemsToBox(productId, packagingId, itemIds, boxId) instead")]]
+int assignItemsToBox(const QVector<ItemId>& itemIds, BoxId boxId);
+```
+
+### 10.4 Deprecated Box Methods
+
+```cpp
+[[deprecated("Use getBox(packagingId, id) instead")]]
+std::optional<Box> getBox(BoxId id);
+
+[[deprecated("Use getBoxesByStatus(packagingId, status, lineId, limit) instead")]]
+QVector<Box> getBoxesByStatus(BoxStatus status, ProductionLineId lineId = 0, int limit = 100);
+
+[[deprecated("Use getSealedBoxesNotOnPallet(packagingId, lineId, limit) instead")]]
+QVector<Box> getSealedBoxesNotOnPallet(ProductionLineId lineId = 0, int limit = 200);
+
+[[deprecated("Use countSealedBoxesNotOnPallet(packagingId, lineId) instead")]]
+int countSealedBoxesNotOnPallet(ProductionLineId lineId = 0);
+
+[[deprecated("Use getBoxesOnPallet(packagingId, palletId) instead")]]
+QVector<Box> getBoxesOnPallet(PalletId palletId);
+
+[[deprecated("Use sealBox(packagingId, id) instead")]]
+bool sealBox(BoxId id);
+
+[[deprecated("Use assignBoxToPallet(packagingId, boxId, palletId) instead")]]
+bool assignBoxToPallet(BoxId boxId, PalletId palletId);
+
+[[deprecated("Use getBoxItemCount(productId, packagingId, id) instead")]]
+int getBoxItemCount(BoxId id);
+```
+
+### 10.5 Deprecated Export Methods
+
+```cpp
+[[deprecated("Use exportItemsAsync(productId, itemIds, lpTin) instead")]]
+QFuture<ExportResult> exportItemsAsync(const QVector<ItemId>& itemIds, const QString& lpTin);
+
+[[deprecated("Use exportBoxesAsync(productId, packagingId, boxIds, lpTin) instead")]]
+QFuture<ExportResult> exportBoxesAsync(const QVector<BoxId>& boxIds, const QString& lpTin);
+
+[[deprecated("Use exportPalletsAsync(productId, packagingId, palletIds, lpTin) instead")]]
+QFuture<ExportResult> exportPalletsAsync(const QVector<PalletId>& palletIds, const QString& lpTin);
+```
+
+### 10.6 Deprecated Statistics
+
+```cpp
+[[deprecated("Use getStats(productId, packagingId, lineId) instead")]]
+ProductionStats getStats(std::optional<ProductionLineId> lineId = std::nullopt);
+```
+
+### 10.7 Migration Example
+
+**Before (using deprecated API):**
+```cpp
+// This works but produces compiler warnings
+auto item = db->getItem(itemId);  // Warning: deprecated
+auto boxes = db->getBoxesByStatus(BoxStatus::Empty);  // Warning: deprecated
+db->assignItemToBox(itemId, boxId);  // Warning: deprecated
+```
+
+**After (using new API):**
+```cpp
+// No warnings - uses dynamic tables
+auto item = db->getItem(productId, itemId);
+auto boxes = db->getBoxesByStatus(packagingId, BoxStatus::Empty);
+db->assignItemToBox(productId, packagingId, itemId, boxId);
+```
+
+### 10.8 Database Tables Used by Each API
+
+| API Version | Tables Used |
+|-------------|-------------|
+| **Deprecated (Legacy)** | `items`, `boxes`, `item_box_assignments` |
+| **New (Dynamic)** | `items_{gtin}`, `boxes_{gtin}`, `{gtin}_{gtin}_assignments` |
+
+> **Note**: Both APIs can coexist, but they operate on different tables. Data in legacy tables is NOT automatically migrated to dynamic tables.

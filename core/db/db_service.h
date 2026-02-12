@@ -211,9 +211,83 @@ public:
                              std::optional<ProductionLineId> lineId = std::nullopt);
 
     // =========================================================================
+    // DEPRECATED API - Legacy methods using single items/boxes tables
+    // These methods are provided for backward compatibility.
+    // Migrate to the new API that uses ProductId/ProductPackagingId parameters.
+    // =========================================================================
+
+    // Deprecated Import Operations
+    [[deprecated("Use importItemsAsync(filePath, lineId, productId) instead")]]
+    QFuture<ImportResult> importItemsAsync(const QString& filePath, ProductionLineId lineId);
+
+    [[deprecated("Use importBoxesAsync(filePath, lineId, packagingId) instead")]]
+    QFuture<ImportResult> importBoxesAsync(const QString& filePath, ProductionLineId lineId);
+
+    // Deprecated Item Operations
+    [[deprecated("Use getItem(productId, id) instead")]]
+    std::optional<Item> getItem(ItemId id);
+
+    [[deprecated("Use getItemsByStatus(productId, status, lineId, limit) instead")]]
+    QVector<Item> getItemsByStatus(ItemStatus status, ProductionLineId lineId = 0, int limit = 100);
+
+    [[deprecated("Use getItemsInBox(productId, packagingId, boxId) instead")]]
+    QVector<Item> getItemsInBox(BoxId boxId);
+
+    [[deprecated("Use getScannedItemsNotInBox(productId, packagingId, lineId, limit) instead")]]
+    QVector<Item> getScannedItemsNotInBox(ProductionLineId lineId = 0, int limit = 200);
+
+    [[deprecated("Use countScannedItemsNotInBox(productId, packagingId, lineId) instead")]]
+    int countScannedItemsNotInBox(ProductionLineId lineId = 0);
+
+    [[deprecated("Use assignItemToBox(productId, packagingId, itemId, boxId) instead")]]
+    bool assignItemToBox(ItemId itemId, BoxId boxId);
+
+    [[deprecated("Use assignItemsToBox(productId, packagingId, itemIds, boxId) instead")]]
+    int assignItemsToBox(const QVector<ItemId>& itemIds, BoxId boxId);
+
+    // Deprecated Box Operations
+    [[deprecated("Use getBox(packagingId, id) instead")]]
+    std::optional<Box> getBox(BoxId id);
+
+    [[deprecated("Use getBoxesByStatus(packagingId, status, lineId, limit) instead")]]
+    QVector<Box> getBoxesByStatus(BoxStatus status, ProductionLineId lineId = 0, int limit = 100);
+
+    [[deprecated("Use getSealedBoxesNotOnPallet(packagingId, lineId, limit) instead")]]
+    QVector<Box> getSealedBoxesNotOnPallet(ProductionLineId lineId = 0, int limit = 200);
+
+    [[deprecated("Use countSealedBoxesNotOnPallet(packagingId, lineId) instead")]]
+    int countSealedBoxesNotOnPallet(ProductionLineId lineId = 0);
+
+    [[deprecated("Use getBoxesOnPallet(packagingId, palletId) instead")]]
+    QVector<Box> getBoxesOnPallet(PalletId palletId);
+
+    [[deprecated("Use sealBox(packagingId, id) instead")]]
+    bool sealBox(BoxId id);
+
+    [[deprecated("Use assignBoxToPallet(packagingId, boxId, palletId) instead")]]
+    bool assignBoxToPallet(BoxId boxId, PalletId palletId);
+
+    [[deprecated("Use getBoxItemCount(productId, packagingId, id) instead")]]
+    int getBoxItemCount(BoxId id);
+
+    // Deprecated Export Operations
+    [[deprecated("Use exportItemsAsync(productId, itemIds, lpTin) instead")]]
+    QFuture<ExportResult> exportItemsAsync(const QVector<ItemId>& itemIds, const QString& lpTin);
+
+    [[deprecated("Use exportBoxesAsync(productId, packagingId, boxIds, lpTin) instead")]]
+    QFuture<ExportResult> exportBoxesAsync(const QVector<BoxId>& boxIds, const QString& lpTin);
+
+    [[deprecated("Use exportPalletsAsync(productId, packagingId, palletIds, lpTin) instead")]]
+    QFuture<ExportResult> exportPalletsAsync(const QVector<PalletId>& palletIds, const QString& lpTin);
+
+    // Deprecated Statistics
+    [[deprecated("Use getStats(productId, packagingId, lineId) instead")]]
+    ProductionStats getStats(std::optional<ProductionLineId> lineId = std::nullopt);
+
+    // =========================================================================
     // Database Access
     // =========================================================================
-    
+
     QSqlDatabase getDatabase();
 
 signals:
@@ -252,7 +326,13 @@ private:
     QString generateBoxExportXml(ExportDocumentId docId, const QString& lpTin, QSqlDatabase& db);
     QString generatePalletExportXml(ExportDocumentId docId, const QString& lpTin, QSqlDatabase& db);
     QString cleanBarcodeForExport(const QString& barcode);
-    
+
+    // Deprecated helpers (use legacy items/boxes/item_box_assignments tables)
+    ImportResult doImportLegacy(const QString& filePath, ProductionLineId lineId, const QString& tableName);
+    ExportResult doExportItemsLegacy(const QVector<ItemId>& itemIds, const QString& lpTin);
+    ExportResult doExportBoxesLegacy(const QVector<BoxId>& boxIds, const QString& lpTin);
+    ExportResult doExportPalletsLegacy(const QVector<PalletId>& palletIds, const QString& lpTin);
+
 // Parse helpers
     User parseUser(const QSqlQuery& query);
     Role parseRole(const QSqlQuery& query);
