@@ -36,29 +36,43 @@ message(STATUS "Qt6 location: ${Qt6_DIR}")
 
 set(SOURCES
     main.cpp
-    
-    # Core - Database (from submodule/shared)
+
+    # Core - Database
     core/db/db_service.cpp
-    
+
     # Server
     server/tcp_server.cpp
-    server/request_handler.cpp
-    
+    server/session_manager.cpp
+
+    # Pipeline
+    server/pipeline/entity_resolver.cpp
+    server/pipeline/state_resolver.cpp
+    server/pipeline/capability_engine.cpp
+    server/pipeline/response_builder.cpp
+    server/pipeline/action_executor.cpp
+
     # Pub/Sub
     pubsub/event_publisher.cpp
     pubsub/permanent_worker.cpp
 )
 
 set(HEADERS
-    # Core - Database
+    # Core
     core/db/types.h
     core/db/db_service.h
-    
+
     # Server
     server/tcp_server.h
-    server/request_handler.h
     server/protocol.h
-    
+    server/session_manager.h
+
+    # Pipeline
+    server/pipeline/entity_resolver.h
+    server/pipeline/state_resolver.h
+    server/pipeline/capability_engine.h
+    server/pipeline/response_builder.h
+    server/pipeline/action_executor.h
+
     # Pub/Sub
     pubsub/event_publisher.h
     pubsub/permanent_worker.h
@@ -187,6 +201,14 @@ add_custom_command(TARGET pubsub_example_client POST_BUILD
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/config.ini.example
     ${CMAKE_CURRENT_BINARY_DIR}/config.ini
+    COPYONLY
+)
+
+# Copy capability rules to build directory
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/rules)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/rules/capability_rules.json
+    ${CMAKE_CURRENT_BINARY_DIR}/rules/capability_rules.json
     COPYONLY
 )
 

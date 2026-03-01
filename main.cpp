@@ -113,11 +113,18 @@ int main(int argc, char* argv[]) {
     }
     
     server.setSessionExpiration(cfg.sessionMinutes);
-    
+
+    // Load capability rules
+    QString rulesPath = QDir(app.applicationDirPath()).filePath("rules/capability_rules.json");
+    if (!server.loadCapabilityRules(rulesPath)) {
+        qCritical() << "Failed to load capability rules from" << rulesPath;
+        return 1;
+    }
+
     if (!server.startServer(cfg.port)) {
         return 1;
     }
-    
+
     qInfo() << "=== Request/Response Server ready on port" << cfg.port << "===";
     
     // Create and start pub/sub event publisher

@@ -210,6 +210,13 @@ public:
     ProductionStats getStats(ProductId productId, ProductPackagingId packagingId,
                              std::optional<ProductionLineId> lineId = std::nullopt);
 
+    // Helper struct for item-box relationship queries
+    struct ItemBoxInfo {
+        BoxId boxId = 0;
+        ProductPackagingId packagingId = 0;
+        QString boxBarcode;
+    };
+
     // =========================================================================
     // DEPRECATED API - Legacy methods using single items/boxes tables
     // These methods are provided for backward compatibility.
@@ -284,6 +291,61 @@ public:
     [[deprecated("Use getStats(productId, packagingId, lineId) instead")]]
     ProductionStats getStats(std::optional<ProductionLineId> lineId = std::nullopt);
 
+    // Deprecated Pipeline Support Methods (use global tables)
+    [[deprecated("Use findBoxForItem(productId, itemId) instead")]]
+    std::optional<ItemBoxInfo> findBoxForItem(ItemId itemId);
+
+    [[deprecated("Use findPalletForBox(packagingId, boxId) instead")]]
+    std::optional<PalletId> findPalletForBox(BoxId boxId);
+
+    [[deprecated("Use isBoxOnPallet(packagingId, boxId) instead")]]
+    bool isBoxOnPallet(BoxId boxId);
+
+    [[deprecated("Use isBoxFree(packagingId, boxId) instead")]]
+    bool isBoxFree(BoxId boxId);
+
+    [[deprecated("Use unsealBoxAction(productId, packagingId, boxId) instead")]]
+    ActionResult unsealBoxAction(BoxId boxId);
+
+    [[deprecated("Use destroyItemAction(productId, packagingId, itemId) instead")]]
+    ActionResult destroyItemAction(ItemId itemId);
+
+    // =========================================================================
+    // Pipeline Support Methods (SYNC)
+    // =========================================================================
+
+    // Entity Resolver: find entity by barcode in global tables
+    // Searches pallets → boxes → items
+    std::optional<ResolvedEntity> findEntityByBarcode(const QString& barcode);
+
+    // State Resolver: pallet state queries
+    int countBoxesOnPallet(PalletId palletId);
+    bool isBoxOnPallet(ProductPackagingId packagingId, BoxId boxId);
+    std::optional<PalletId> findPalletForBox(ProductPackagingId packagingId, BoxId boxId);
+
+    // State Resolver: box state queries
+    bool isBoxFree(ProductPackagingId packagingId, BoxId boxId);
+
+    // State Resolver: item state queries
+    std::optional<ItemBoxInfo> findBoxForItem(ProductId productId, ItemId itemId);
+
+    // GTIN lookup helpers
+    QString getPackagingGtin(ProductPackagingId packagingId);
+
+    // Action Executor: barcode lookup in specific dynamic tables
+    std::optional<Box> findBoxByBarcode(ProductPackagingId packagingId,
+                                         const QString& barcode);
+    std::optional<Item> findItemByBarcode(ProductId productId,
+                                           const QString& barcode);
+
+    // Action Executor: atomic action operations (use transactions internally)
+    ActionResult unsealBoxAction(ProductId productId,
+                                  ProductPackagingId packagingId,
+                                  BoxId boxId);
+    ActionResult destroyItemAction(ProductId productId,
+                                    ProductPackagingId packagingId,
+                                    ItemId itemId);
+
     // =========================================================================
     // Database Access
     // =========================================================================
@@ -303,7 +365,6 @@ private:
     QString getBoxesTableName(const QString& packagingGtin) const;
     QString getAssignmentsTableName(const QString& productGtin, const QString& packagingGtin) const;
     QString getProductGtin(ProductId productId);
-    QString getPackagingGtin(ProductPackagingId packagingId);
     std::optional<ProductId> getProductIdForPackaging(ProductPackagingId packagingId);
 
     // Table creation helpers

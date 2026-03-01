@@ -1552,19 +1552,19 @@ int DbService::getBoxItemCount(ProductId productId, ProductPackagingId packaging
 
 std::optional<Pallet> DbService::getPallet(PalletId id) {
     if (!ensureConnected()) return std::nullopt;
-    
+
     QSqlDatabase db = getDatabase();
     QSqlQuery query(db);
     query.prepare(
-        "SELECT id, bar_code, status, production_line, created_at "
+        "SELECT id, bar_code, status, production_line, created_at, max_boxes "
         "FROM pallets WHERE id = :id"
     );
     query.bindValue(":id", id);
-    
+
     if (query.exec() && query.next()) {
         return parsePallet(query);
     }
-    
+
     return std::nullopt;
 }
 
@@ -1577,10 +1577,10 @@ QVector<Pallet> DbService::getPalletsByStatus(PalletStatus status, ProductionLin
     QSqlDatabase db = getDatabase();
     QSqlQuery query(db);
     
-    QString sql = 
-        "SELECT id, bar_code, status, production_line, created_at "
+    QString sql =
+        "SELECT id, bar_code, status, production_line, created_at, max_boxes "
         "FROM pallets WHERE status = :status";
-    
+
     if (lineId > 0) {
         sql += " AND production_line = :lineId";
     }
@@ -2916,7 +2916,12 @@ Pallet DbService::parsePallet(const QSqlQuery& query) {
     pallet.status = static_cast<PalletStatus>(query.value(2).toInt());
     pallet.productionLine = query.value(3).toLongLong();
     pallet.createdAt = query.value(4).toDateTime();
-    // Note: Schema does not have completed_at column
+    // max_boxes column (added by migration 004)
+    if (query.record().contains("max_boxes")) {
+        pallet.maxBoxes = query.value(query.record().indexOf("max_boxes")).toInt();
+    } else if (query.record().count() > 5) {
+        pallet.maxBoxes = query.value(5).toInt();
+    }
     return pallet;
 }
 
@@ -4298,6 +4303,465 @@ ProductionStats DbService::getStats(std::optional<ProductionLineId> lineId) {
     }
 
     return stats;
+}
+
+// ============================================================================
+// Deprecated Pipeline Support Methods (use global tables)
+// ============================================================================
+
+std::optional<DbService::ItemBoxInfo> DbService::findBoxForItem(ItemId itemId) {
+    if (!ensureConnected()) return std::nullopt;
+
+    QSqlDatabase db = getDatabase();
+    QSqlQuery q(db);
+    q.prepare(
+        "SELECT a.box_id, b.bar_code "
+        "FROM item_box_assignments a JOIN boxes b ON a.box_id = b.id "
+        "WHERE a.item_id = :iid LIMIT 1"
+    );
+    q.bindValue(":iid", itemId);
+
+    if (q.exec() && q.next()) {
+        ItemBoxInfo info;
+        info.boxId = q.value(0).toLongLong();
+        info.packagingId = 0;
+        info.boxBarcode = q.value(1).toString();
+        return info;
+    }
+    return std::nullopt;
+}
+
+std::optional<PalletId> DbService::findPalletForBox(BoxId boxId) {
+    if (!ensureConnected()) return std::nullopt;
+
+    QSqlDatabase db = getDatabase();
+    QSqlQuery q(db);
+    q.prepare("SELECT pallet_id FROM pallet_box_assignments WHERE box_id = :bid LIMIT 1");
+    q.bindValue(":bid", boxId);
+
+    if (q.exec() && q.next()) {
+        return q.value(0).toLongLong();
+    }
+    return std::nullopt;
+}
+
+bool DbService::isBoxOnPallet(BoxId boxId) {
+    if (!ensureConnected()) return false;
+
+    QSqlDatabase db = getDatabase();
+    QSqlQuery q(db);
+    q.prepare("SELECT 1 FROM pallet_box_assignments WHERE box_id = :bid LIMIT 1");
+    q.bindValue(":bid", boxId);
+
+    return q.exec() && q.next();
+}
+
+bool DbService::isBoxFree(BoxId boxId) {
+    return !isBoxOnPallet(boxId);
+}
+
+ActionResult DbService::unsealBoxAction(BoxId boxId) {
+    ActionResult result;
+    if (!ensureConnected()) {
+        result.message = "Database not connected";
+        return result;
+    }
+
+    QSqlDatabase db = getDatabase();
+    db.transaction();
+
+    // 1. Get all item IDs assigned to this box
+    QSqlQuery itemsQuery(db);
+    itemsQuery.prepare("SELECT item_id FROM item_box_assignments WHERE box_id = :bid");
+    itemsQuery.bindValue(":bid", boxId);
+    if (!itemsQuery.exec()) {
+        db.rollback();
+        result.message = "Failed to query assignments: " + itemsQuery.lastError().text();
+        return result;
+    }
+
+    QVector<ItemId> itemIds;
+    while (itemsQuery.next()) {
+        itemIds.append(itemsQuery.value(0).toLongLong());
+    }
+
+    // 2. Reset all assigned items to status 0
+    for (ItemId iid : itemIds) {
+        QSqlQuery updateItem(db);
+        updateItem.prepare("UPDATE items SET status = 0, scanned_at = NULL WHERE id = :id");
+        updateItem.bindValue(":id", iid);
+        if (!updateItem.exec()) {
+            db.rollback();
+            result.message = "Failed to reset item status";
+            return result;
+        }
+    }
+
+    // 3. Delete all assignments for this box
+    QSqlQuery delAssign(db);
+    delAssign.prepare("DELETE FROM item_box_assignments WHERE box_id = :bid");
+    delAssign.bindValue(":bid", boxId);
+    if (!delAssign.exec()) {
+        db.rollback();
+        result.message = "Failed to delete assignments";
+        return result;
+    }
+
+    // 4. Reset box status to 0 (Empty)
+    QSqlQuery updateBox(db);
+    updateBox.prepare("UPDATE boxes SET status = 0, sealed_at = NULL WHERE id = :id");
+    updateBox.bindValue(":id", boxId);
+    if (!updateBox.exec()) {
+        db.rollback();
+        result.message = "Failed to reset box status";
+        return result;
+    }
+
+    db.commit();
+    result.success = true;
+    result.message = QString("Box unsealed, %1 items reset").arg(itemIds.size());
+    result.data.insert("items_reset", itemIds.size());
+    return result;
+}
+
+ActionResult DbService::destroyItemAction(ItemId itemId) {
+    ActionResult result;
+    if (!ensureConnected()) {
+        result.message = "Database not connected";
+        return result;
+    }
+
+    QSqlDatabase db = getDatabase();
+    db.transaction();
+
+    // 1. Remove any box assignment
+    QSqlQuery delAssign(db);
+    delAssign.prepare("DELETE FROM item_box_assignments WHERE item_id = :iid");
+    delAssign.bindValue(":iid", itemId);
+    delAssign.exec();  // OK if no rows affected
+
+    // 2. Reset item status to 0
+    QSqlQuery updateItem(db);
+    updateItem.prepare("UPDATE items SET status = 0, scanned_at = NULL WHERE id = :id");
+    updateItem.bindValue(":id", itemId);
+    if (!updateItem.exec()) {
+        db.rollback();
+        result.message = "Failed to reset item status";
+        return result;
+    }
+
+    db.commit();
+    result.success = true;
+    result.message = "Item destroyed (reset to available)";
+    return result;
+}
+
+// ============================================================================
+// Pipeline Support Methods
+// ============================================================================
+
+std::optional<ResolvedEntity> DbService::findEntityByBarcode(const QString& barcode) {
+    if (!ensureConnected()) return std::nullopt;
+    QSqlDatabase db = getDatabase();
+
+    // 1. Check pallets table
+    {
+        QSqlQuery q(db);
+        q.prepare("SELECT id, bar_code, status, production_line, created_at, max_boxes "
+                   "FROM pallets WHERE bar_code = :bc");
+        q.bindValue(":bc", barcode);
+        if (q.exec() && q.next()) {
+            ResolvedEntity re;
+            re.type = EntityType::Pallet;
+            re.pallet = parsePallet(q);
+            return re;
+        }
+    }
+
+    // 2. Check global boxes table
+    {
+        QSqlQuery q(db);
+        q.prepare("SELECT id, bar_code, status, production_line, imported_at, sealed_at "
+                   "FROM boxes WHERE bar_code = :bc");
+        q.bindValue(":bc", barcode);
+        if (q.exec() && q.next()) {
+            ResolvedEntity re;
+            re.type = EntityType::Box;
+            re.box = parseBox(q);
+            return re;
+        }
+    }
+
+    // 3. Check global items table
+    {
+        QSqlQuery q(db);
+        q.prepare("SELECT id, bar_code, status, production_line, imported_at, scanned_at "
+                   "FROM items WHERE bar_code = :bc");
+        q.bindValue(":bc", barcode);
+        if (q.exec() && q.next()) {
+            ResolvedEntity re;
+            re.type = EntityType::Item;
+            re.item = parseItem(q);
+            return re;
+        }
+    }
+
+    return std::nullopt;
+}
+
+int DbService::countBoxesOnPallet(PalletId palletId) {
+    if (!ensureConnected()) return 0;
+
+    QSqlDatabase db = getDatabase();
+    QSqlQuery q(db);
+    q.prepare("SELECT COUNT(*) FROM pallet_box_assignments WHERE pallet_id = :pid");
+    q.bindValue(":pid", palletId);
+
+    if (q.exec() && q.next()) {
+        return q.value(0).toInt();
+    }
+    return 0;
+}
+
+bool DbService::isBoxOnPallet(ProductPackagingId /*packagingId*/, BoxId boxId) {
+    if (!ensureConnected()) return false;
+
+    QSqlDatabase db = getDatabase();
+    QSqlQuery q(db);
+    q.prepare("SELECT 1 FROM pallet_box_assignments WHERE box_id = :bid LIMIT 1");
+    q.bindValue(":bid", boxId);
+
+    return q.exec() && q.next();
+}
+
+std::optional<PalletId> DbService::findPalletForBox(ProductPackagingId /*packagingId*/, BoxId boxId) {
+    if (!ensureConnected()) return std::nullopt;
+
+    QSqlDatabase db = getDatabase();
+    QSqlQuery q(db);
+    q.prepare("SELECT pallet_id FROM pallet_box_assignments WHERE box_id = :bid LIMIT 1");
+    q.bindValue(":bid", boxId);
+
+    if (q.exec() && q.next()) {
+        return q.value(0).toLongLong();
+    }
+    return std::nullopt;
+}
+
+bool DbService::isBoxFree(ProductPackagingId packagingId, BoxId boxId) {
+    // A box is "free" if it is NOT assigned to any pallet
+    return !isBoxOnPallet(packagingId, boxId);
+}
+
+std::optional<DbService::ItemBoxInfo> DbService::findBoxForItem(ProductId productId, ItemId itemId) {
+    if (!ensureConnected()) return std::nullopt;
+
+    QSqlDatabase db = getDatabase();
+
+    QString productGtin = getProductGtin(productId);
+    if (productGtin.isEmpty()) return std::nullopt;
+
+    // Search all packaging for this product
+    QSqlQuery pkgQuery(db);
+    pkgQuery.prepare("SELECT id, gtin FROM product_packaging WHERE product_id = :pid");
+    pkgQuery.bindValue(":pid", productId);
+    if (!pkgQuery.exec()) return std::nullopt;
+
+    while (pkgQuery.next()) {
+        ProductPackagingId pkgId = pkgQuery.value(0).toLongLong();
+        QString pkgGtin = pkgQuery.value(1).toString();
+        QString assignTable = getAssignmentsTableName(productGtin, pkgGtin);
+        QString boxTable = getBoxesTableName(pkgGtin);
+
+        QSqlQuery q(db);
+        q.prepare(QString(
+            "SELECT a.box_id, b.bar_code "
+            "FROM %1 a JOIN %2 b ON a.box_id = b.id "
+            "WHERE a.item_id = :iid LIMIT 1"
+        ).arg(assignTable, boxTable));
+        q.bindValue(":iid", itemId);
+
+        if (q.exec() && q.next()) {
+            ItemBoxInfo info;
+            info.boxId = q.value(0).toLongLong();
+            info.packagingId = pkgId;
+            info.boxBarcode = q.value(1).toString();
+            return info;
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<Box> DbService::findBoxByBarcode(ProductPackagingId packagingId,
+                                                const QString& barcode) {
+    if (!ensureConnected()) return std::nullopt;
+
+    QString pkgGtin = getPackagingGtin(packagingId);
+    if (pkgGtin.isEmpty()) return std::nullopt;
+
+    QString boxTable = getBoxesTableName(pkgGtin);
+
+    QSqlDatabase db = getDatabase();
+    QSqlQuery q(db);
+    q.prepare(QString("SELECT id, bar_code, status, production_line, imported_at, sealed_at "
+                       "FROM %1 WHERE bar_code = :bc AND NOT is_deleted").arg(boxTable));
+    q.bindValue(":bc", barcode);
+
+    if (q.exec() && q.next()) {
+        Box box = parseBox(q);
+        box.packagingId = packagingId;
+        return box;
+    }
+    return std::nullopt;
+}
+
+std::optional<Item> DbService::findItemByBarcode(ProductId productId,
+                                                  const QString& barcode) {
+    if (!ensureConnected()) return std::nullopt;
+
+    QString prodGtin = getProductGtin(productId);
+    if (prodGtin.isEmpty()) return std::nullopt;
+
+    QString itemTable = getItemsTableName(prodGtin);
+
+    QSqlDatabase db = getDatabase();
+    QSqlQuery q(db);
+    q.prepare(QString("SELECT id, bar_code, status, production_line, imported_at, scanned_at "
+                       "FROM %1 WHERE bar_code = :bc AND NOT is_deleted").arg(itemTable));
+    q.bindValue(":bc", barcode);
+
+    if (q.exec() && q.next()) {
+        Item item = parseItem(q);
+        item.productId = productId;
+        return item;
+    }
+    return std::nullopt;
+}
+
+ActionResult DbService::unsealBoxAction(ProductId productId,
+                                         ProductPackagingId packagingId,
+                                         BoxId boxId) {
+    ActionResult result;
+    if (!ensureConnected()) {
+        result.message = "Database not connected";
+        return result;
+    }
+
+    QString productGtin = getProductGtin(productId);
+    QString packagingGtin = getPackagingGtin(packagingId);
+    if (productGtin.isEmpty() || packagingGtin.isEmpty()) {
+        result.message = "Invalid product or packaging";
+        return result;
+    }
+
+    QString boxTable = getBoxesTableName(packagingGtin);
+    QString itemTable = getItemsTableName(productGtin);
+    QString assignTable = getAssignmentsTableName(productGtin, packagingGtin);
+
+    QSqlDatabase db = getDatabase();
+    db.transaction();
+
+    // 1. Get all item IDs assigned to this box
+    QSqlQuery itemsQuery(db);
+    itemsQuery.prepare(QString("SELECT item_id FROM %1 WHERE box_id = :bid").arg(assignTable));
+    itemsQuery.bindValue(":bid", boxId);
+    if (!itemsQuery.exec()) {
+        db.rollback();
+        result.message = "Failed to query assignments: " + itemsQuery.lastError().text();
+        return result;
+    }
+
+    QVector<ItemId> itemIds;
+    while (itemsQuery.next()) {
+        itemIds.append(itemsQuery.value(0).toLongLong());
+    }
+
+    // 2. Reset all assigned items to status 0
+    for (ItemId iid : itemIds) {
+        QSqlQuery updateItem(db);
+        updateItem.prepare(QString("UPDATE %1 SET status = 0, scanned_at = NULL WHERE id = :id").arg(itemTable));
+        updateItem.bindValue(":id", iid);
+        if (!updateItem.exec()) {
+            db.rollback();
+            result.message = "Failed to reset item status";
+            return result;
+        }
+    }
+
+    // 3. Delete all assignments for this box
+    QSqlQuery delAssign(db);
+    delAssign.prepare(QString("DELETE FROM %1 WHERE box_id = :bid").arg(assignTable));
+    delAssign.bindValue(":bid", boxId);
+    if (!delAssign.exec()) {
+        db.rollback();
+        result.message = "Failed to delete assignments";
+        return result;
+    }
+
+    // 4. Reset box status to 0 (Empty)
+    QSqlQuery updateBox(db);
+    updateBox.prepare(QString("UPDATE %1 SET status = 0, sealed_at = NULL WHERE id = :id").arg(boxTable));
+    updateBox.bindValue(":id", boxId);
+    if (!updateBox.exec()) {
+        db.rollback();
+        result.message = "Failed to reset box status";
+        return result;
+    }
+
+    db.commit();
+    result.success = true;
+    result.message = QString("Box unsealed, %1 items reset").arg(itemIds.size());
+    result.data.insert("items_reset", itemIds.size());
+    return result;
+}
+
+ActionResult DbService::destroyItemAction(ProductId productId,
+                                            ProductPackagingId packagingId,
+                                            ItemId itemId) {
+    ActionResult result;
+    if (!ensureConnected()) {
+        result.message = "Database not connected";
+        return result;
+    }
+
+    QString productGtin = getProductGtin(productId);
+    if (productGtin.isEmpty()) {
+        result.message = "Invalid product";
+        return result;
+    }
+
+    QString itemTable = getItemsTableName(productGtin);
+
+    QSqlDatabase db = getDatabase();
+    db.transaction();
+
+    // 1. If item has a box assignment, remove it
+    if (packagingId > 0) {
+        QString packagingGtin = getPackagingGtin(packagingId);
+        if (!packagingGtin.isEmpty()) {
+            QString assignTable = getAssignmentsTableName(productGtin, packagingGtin);
+            QSqlQuery delAssign(db);
+            delAssign.prepare(QString("DELETE FROM %1 WHERE item_id = :iid").arg(assignTable));
+            delAssign.bindValue(":iid", itemId);
+            delAssign.exec();  // OK if no rows affected (item might not be in a box)
+        }
+    }
+
+    // 2. Reset item status to 0
+    QSqlQuery updateItem(db);
+    updateItem.prepare(QString("UPDATE %1 SET status = 0, scanned_at = NULL WHERE id = :id").arg(itemTable));
+    updateItem.bindValue(":id", itemId);
+    if (!updateItem.exec()) {
+        db.rollback();
+        result.message = "Failed to reset item status";
+        return result;
+    }
+
+    db.commit();
+    result.success = true;
+    result.message = "Item destroyed (reset to available)";
+    return result;
 }
 
 } // namespace core

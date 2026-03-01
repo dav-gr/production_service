@@ -1,0 +1,63 @@
+{
+  "capability_rules": [
+    {
+      "capability": "COMPLETE",
+      "scope": "pallet",
+      "label": "Complete Pallet",
+      "when": [
+        {"field": "pallet.is_full", "eq": true},
+        {"field": "pallet.is_complete", "eq": false}
+      ]
+    },
+    {
+      "capability": "REMOVE",
+      "scope": "pallet",
+      "label": "Remove Box",
+      "when": [
+        {"field": "pallet.box_count", "gt": 0}
+      ],
+      "steps": [
+        {"name": "box_barcode", "input": "scan", "prompt": "Scan box to remove"}
+      ]
+    },
+    {
+      "capability": "REPLACE",
+      "scope": "pallet",
+      "label": "Replace Box",
+      "when": [
+        {"field": "pallet.box_count", "gt": 0}
+      ],
+      "steps": [
+        {"name": "old_box", "input": "scan", "prompt": "Scan damaged box"},
+        {"name": "new_box", "input": "scan", "prompt": "Scan replacement box"}
+      ]
+    },
+    {
+      "capability": "PRINT",
+      "scope": "pallet",
+      "label": "Print Label",
+      "when": [
+        {"field": "pallet.is_complete", "eq": true}
+      ]
+    },
+    {
+      "capability": "UNSEAL",
+      "scope": "box",
+      "label": "Unseal Box",
+      "when": [
+        {"field": "box.status", "eq": 1},
+        {"field": "box.is_free", "eq": true}
+      ],
+      "confirm": "Will reset box and {item_count} items to status 0"
+    },
+    {
+      "capability": "DESTROY",
+      "scope": "item",
+      "label": "Destroy Item",
+      "when": [
+        {"field": "item.status", "eq": 1}
+      ],
+      "confirm": "Reset item to status 0"
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+event_model:
+  description: "Event-driven aggregation model for pallet-box-item serialization"
+
+  commands:
+    - ADD_BOX_TO_PALLET
+    - REMOVE_BOX_FROM_PALLET
+    - REPLACE_BOX_IN_PALLET
+    - COMPLETE_PALLET
+    - PRINT_PALLET
+    - EXPORT_PALLET
+
+  events:
+    - PALLET_CREATED
+    - BOX_ADDED_TO_PALLET
+    - BOX_REMOVED_FROM_PALLET
+    - PALLET_COMPLETED
+    - PALLET_REOPENED
+    - PALLET_LABEL_PRINTED
+    - PALLET_EXPORTED
+
+  event_store_schema:
+    fields:
+      - event_id
+      - timestamp
+      - event_type
+      - entity_id
+      - payload_json
+      - operator_id
+
+  projections:
+    pallet_view:
+      fields:
+        - pallet_id
+        - box_count
+        - max_size
+        - is_complete
+
+    box_view:
+      fields:
+        - box_id
+        - assigned_pallet_id
+
+    aggregation_tree_view:
+      fields:
+        - pallet_id
+        - box_id
+        - item_id
+        - pallet_completed
+
+  rules:
+    ADD_BOX_TO_PALLET:
+      require:
+        - box.is_free == true
+        - pallet.is_complete == false
+        - pallet.box_count < pallet.max_size
+
+    PRINT_PALLET:
+      require:
+        - pallet.is_complete == true
+
+    COMPLETE_PALLET:
+      require:
+        - pallet.box_count == pallet.max_size

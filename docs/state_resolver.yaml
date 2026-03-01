@@ -1,0 +1,17 @@
+state_resolvers:
+  pallet:
+    derive:
+      box_count: COUNT(box WHERE assigned_pallet_id == pallet.id)
+      is_full: box_count >= pallet.max_size
+      is_complete: is_full AND pallet.marked_complete == true
+      is_empty: box_count == 0
+      is_incomplete: NOT is_complete
+
+  box:
+    derive:
+      assigned: assigned_pallet_id != null
+      is_free: assigned_pallet_id == null
+
+  item:
+    derive:
+      assigned_box_exists: assigned_box_id != null

@@ -1,0 +1,34 @@
+projector:
+  description: "Updates read models from events"
+
+  handlers:
+
+    BOX_ADDED_TO_PALLET:
+      actions:
+        - increment pallet_view.box_count
+        - update box_view.assigned_pallet_id
+        - insert aggregation_tree_view rows
+
+    BOX_REMOVED_FROM_PALLET:
+      actions:
+        - decrement pallet_view.box_count
+        - clear box_view.assigned_pallet_id
+        - delete aggregation_tree_view rows
+
+    PALLET_COMPLETED:
+      actions:
+        - set pallet_view.is_complete = true
+        - mark aggregation_tree_view.pallet_completed = true
+
+    PALLET_REOPENED:
+      actions:
+        - set pallet_view.is_complete = false
+        - mark aggregation_tree_view.pallet_completed = false
+
+    PALLET_LABEL_PRINTED:
+      actions:
+        - record print timestamp
+
+    PALLET_EXPORTED:
+      actions:
+        - record export history

@@ -1,0 +1,180 @@
+full_scan_action_table:
+
+# ==========================================================
+# ITEM SCANS
+# ==========================================================
+
+  - barcode_type: "item"
+    state: "active_standalone"
+    actions: ["destroy"]
+    message: "Item is active and not assigned to any box. It can be destroyed."
+    constraints:
+      - "status must be 1"
+      - "Only item is affected — no aggregation cascade"
+    effects:
+      destroy:
+        steps:
+          - "item.status 1 → 0"
+
+  - barcode_type: "item"
+    state: "active_in_box"
+    actions: ["destroy", "redirect_to_box"]
+    message: "Item belongs to a box. Destroy affects box sealing. Aggregation actions follow box flow."
+    constraints:
+      - "Destroy resets parent box and all items"
+      - "Aggregation actions are NOT executed on item directly"
+    effects:
+      destroy:
+        steps:
+          - "item.status 1 → 0"
+          - "parent_box.status 1 → 0"
+          - "all items in parent_box: status 1 → 0"
+
+      redirect_to_box:
+        steps:
+          - "resolve parent_box(barcode)"
+          - "continue evaluation as barcode_type = box"
+
+  - barcode_type: "item"
+    state: "inactive"
+    actions: []
+    message: "Item already inactive."
+    constraints:
+      - "Destroy disabled when status = 0"
+
+
+# ==========================================================
+# BOX SCANS — SERIALIZATION LOGIC
+# ==========================================================
+
+  - barcode_type: "box"
+    state: "sealed"
+    actions: ["destroy"]
+    message: "Destroying sealed box resets all contained items."
+    constraints:
+      - "status must be 1"
+    effects:
+      destroy:
+        steps:
+          - "box.status 1 → 0"
+          - "all items in box: status 1 → 0"
+
+  - barcode_type: "box"
+    state: "unsealed"
+    actions: []
+    message: "Box already unsealed."
+    constraints:
+      - "Destroy disabled when status = 0"
+
+
+# ==========================================================
+# BOX SCANS — PALLET AGGREGATION FLOW
+# ==========================================================
+
+  - barcode_type: "box"
+    state: "outside_pallet"
+    actions: ["add"]
+    message: "Free box can be added to pallet."
+    constraints:
+      - "box must not be assigned to another pallet"
+      - "pallet must not exceed max capacity"
+    effects:
+      add:
+        steps:
+          - "assign box → pallet"
+          - "box.status 0 → 1"
+          - "increment pallet.box_count"
+          - "if pallet.box_count == pallet.max_size:"
+          - "    pallet.status 0 → 1 (complete)"
+
+  - barcode_type: "box"
+    state: "inside_complete_pallet"
+    actions: ["remove", "replace", "print"]
+    message: "Box belongs to a complete pallet."
+    constraints:
+      - "print available only when pallet is full"
+    effects:
+
+      remove:
+        steps:
+          - "pallet.status 1 → 0"
+          - "box.status 1 → 0"
+          - "remove box → pallet assignment"
+          - "decrement pallet.box_count"
+
+      replace:
+        steps:
+          - "old_box.status 1 → 0"
+          - "new_box.status 0 → 1"
+          - "update pallet assignment"
+          - "pallet.status remains 1"
+
+      print:
+        steps:
+          - "require pallet.box_count == pallet.max_size"
+          - "print pallet barcode"
+
+
+# ==========================================================
+# PALLET SCANS
+# ==========================================================
+
+  - barcode_type: "pallet"
+    state: "empty"
+    actions: ["add"]
+    message: "Empty pallet ready for aggregation."
+    constraints:
+      - "only free boxes allowed"
+
+  - barcode_type: "pallet"
+    state: "partial"
+    actions: ["add", "remove", "replace"]
+    message: "Pallet partially filled."
+    constraints:
+      - "cannot exceed max capacity"
+
+  - barcode_type: "pallet"
+    state: "full_pending_completion"
+    actions: ["mark_complete"]
+    message: "Scan pallet barcode to finalize pallet."
+    constraints:
+      - "box_count must equal max_size"
+    effects:
+      mark_complete:
+        steps:
+          - "pallet.status 0 → 1"
+
+  - barcode_type: "pallet"
+    state: "complete"
+    actions: ["remove", "replace", "print"]
+    message: "Complete pallet. Controlled edits allowed."
+    constraints:
+      - "print allowed only if pallet full"
+    effects:
+
+      remove:
+        steps:
+          - "pallet.status 1 → 0"
+          - "box.status 1 → 0"
+          - "remove box → pallet assignment"
+
+      replace:
+        steps:
+          - "old_box.status 1 → 0"
+          - "new_box.status 0 → 1"
+          - "pallet.status remains 1"
+
+      print:
+        steps:
+          - "require pallet.box_count == pallet.max_size"
+          - "print pallet barcode"
+
+
+# ==========================================================
+# UNKNOWN BARCODE
+# ==========================================================
+
+  - barcode_type: "unknown"
+    state: "unknown_barcode_type"
+    actions: ["log", "ignore"]
+    message: "Barcode not recognized"

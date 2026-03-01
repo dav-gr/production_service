@@ -23,6 +23,9 @@ CTestTestfile.cmake
 *.sln
 *.vcxproj
 
+#Claude
+.claude/
+
 # Binaries and executables
 *.exe
 *.dll
@@ -62,3 +65,94 @@ config.ini
 # Output directories
 /bin/
 /lib/
+
+# Qt Creator
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qbs.user.*
+
+# Build directories
+build/
+build-*/
+debug/
+release/
+CMakeFiles/
+cmake_install.cmake
+CMakeCache.txt
+
+# Qt Creator IDE files
+.qtc_clangd/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CMake
+CMakeLists.txt.user
+CMakeLists.txt.user.*
+
+# Object files and libraries
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.lib
+*.dll
+*.exe
+*.out
+
+# Compiled moc files
+moc_*.cpp
+moc_*.h
+ui_*.h
+
+# Resource files
+qrc_*.cpp
+
+# Qt Resource Compiler
+*.qrc~
+
+# Executables
+*.app/
+*.exe
+*.elf
+
+# Dependencies
+*.d
+*.la
+*.lo
+*.lai
+
+# Misc
+.qmake.stash
+Makefile
+Makefile.*
+.qmake.cache
+.qmake.vars
+
+# IDE-specific
+.vscode/
+.settings/
+.project
+.cproject
+.classpath
+
+# OS-specific
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Python cache (if using Python scripts)
+__pycache__/
+*.pyc
+*.pyo
+
+# Node modules (if using Node.js tools)
+node_modules/
+

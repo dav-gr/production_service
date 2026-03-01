@@ -1,0 +1,26 @@
+{
+  "scan_response": {
+    "entity_type": "pallet | box | item | unknown",
+    "resolved_from_item": "boolean",
+    "context": {
+      "pallet": {
+        "id": "string",
+        "box_count": "number",
+        "max_size": "number",
+        "is_full": "boolean",
+        "is_complete": "boolean"
+      },
+      "box": {
+        "id": "string",
+        "is_free": "boolean",
+        "assigned": "boolean"
+      }
+    },
+    "available_actions": [
+      {
+        "action": "ADD | REMOVE | REPLACE | PRINT | COMPLETE",
+        "message": "string"
+      }
+    ]
+  }
+}

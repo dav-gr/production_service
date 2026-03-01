@@ -1,0 +1,15 @@
+effects:
+
+  REMOVE:
+    - unassign_box_from_pallet
+    - pallet.marked_complete = false
+
+  REPLACE:
+    - old_box.unassign
+    - new_box.assign_to_same_pallet
+
+  COMPLETE:
+    - pallet.marked_complete = true
+
+  PRINT:
+    - print_pallet_barcode

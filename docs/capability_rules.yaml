@@ -1,0 +1,24 @@
+capability_rules:
+
+  - capability: ADD
+    enable_when:
+      - entity_type == "box"
+      - box.is_free == true
+      - pallet.is_full == false
+
+  - capability: REMOVE
+    enable_when:
+      - pallet.is_complete == true
+
+  - capability: REPLACE
+    enable_when:
+      - pallet.is_complete == true
+
+  - capability: PRINT
+    enable_when:
+      - pallet.is_complete == true
+
+  - capability: COMPLETE
+    enable_when:
+      - pallet.is_full == true
+      - pallet.is_complete == false
